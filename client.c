@@ -11,6 +11,10 @@
 
 #include <stdint.h> // For uint32_t
 
+#define MAX_FILENAME 256
+#define MAX_PATH_LEN 3072
+#define COMMAND_LENGTH 16
+
 struct sockaddr_in server_addr; // client_addr and c are not used in client.c
 GtkListStore *file_list_store;
 
@@ -126,12 +130,12 @@ void on_upload_file_clicked(GtkButton *button, gpointer user_data)
             exit(1);
         }
 
-        if (send(s, "addFile", 1024, 0) < 0)
+        if (send(s, "addFile", COMMAND_LENGTH, 0) < 0)
         {
             perror("send");
             exit(1);
         }
-        if (send(s, my_basename, 1024, 0) < 0)
+        if (send(s, my_basename, MAX_FILENAME, 0) < 0)
         {
             perror("send");
             exit(1);
@@ -239,13 +243,13 @@ void on_add_folder_clicked(GtkButton *button, gpointer user_data)
             perror("connect");
             exit(1);
         }
-        if (send(s, "addFolder", 1024, 0) < 0)
+        if (send(s, "addFolder", COMMAND_LENGTH, 0) < 0)
         {
             perror("send");
             exit(1);
         }
 
-        if (send(s, my_folder_name, 1024, 0) < 0)
+        if (send(s, my_folder_name, MAX_FILENAME, 0) < 0)
         {
             perror("send");
             exit(1);
@@ -331,17 +335,17 @@ void on_menu_rename_activate(GtkMenuItem *menuitem, gpointer user_data)
             exit(1);
         }
             
-        if(send(s, "rename", 1024, 0) < 0) 
+        if(send(s, "rename", COMMAND_LENGTH, 0) < 0) 
         {
             perror("send");
             exit(1);
         }
-        if(send(s, old_filename, 1024, 0) < 0) 
+        if(send(s, old_filename, MAX_FILENAME, 0) < 0) 
         {
             perror("send");
             exit(1);
         }
-        if(send(s, new_filename, 1024, 0) < 0) 
+        if(send(s, new_filename, MAX_FILENAME, 0) < 0) 
         {
             perror("send");
             exit(1);
@@ -370,8 +374,27 @@ void on_menu_view_activate(GtkMenuItem *menuitem, gpointer user_data)
         g_free(foldername);
         return;
     }
-
+    //     int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); // Use local s
+    // if (s == -1)
+    // {
+    //     perror("socket");
+    //     exit(1);
+    // }
+    // if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    // {
+    //     perror("connect");
+    //     exit(1);
+    // }
+    // char *command = "getList";
+    // if (send(s, command, strlen(command) + 1, 0) < 0)
+    // {
+    //     perror("send command");
+    //     exit(1);
+    // }
+    // get_list_of_files(file_list_store, command, s);
     
+    
+    // close(s);
     g_free(foldername);
 }
 // Callback function when "Delete" is selected from the context menu
@@ -427,14 +450,14 @@ void on_menu_delete_activate(GtkMenuItem *menuitem, gpointer user_data)
             perror("connect");
             exit(1);
         }
-        if (send(s, command_to_send, 1024, 0) < 0)
+        if (send(s, command_to_send, COMMAND_LENGTH, 0) < 0)
         {
             printf("3\n");
             perror("send");
             exit(1);
         }
 
-        if (send(s, my_basename, 1024, 0) < 0)
+        if (send(s, my_basename, MAX_FILENAME, 0) < 0)
         {
             printf("4\n");
             perror("send");
@@ -544,7 +567,7 @@ ssize_t recv_all(int sockfd, void *buf, size_t len, int flags)
     return total_received;
 }
 
-void get_list_of_files(GtkListStore *file_list_store) // Removed iter parameter
+void get_list_of_files(GtkListStore *file_list_store, char* foldername) // Removed iter parameter
 {
     int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); // Use local s
     if (s == -1)
@@ -558,121 +581,72 @@ void get_list_of_files(GtkListStore *file_list_store) // Removed iter parameter
         exit(1);
     }
     char *command = "getList";
-    if (send(s, command, strlen(command) + 1, 0) < 0)
+    if (send(s, command, COMMAND_LENGTH, 0) < 0)
     {
         perror("send command");
         exit(1);
     }
-
-    uint32_t net_len;
+    
+    if(send(s,foldername,1024,0) < 0){
+        perror("send");
+        exit(1);
+    }
     ssize_t bytes_read;
 
     while (1) // Loop indefinitely until a zero-length is received
     {
-        // Receive filename length
-        bytes_read = recv_all(s, &net_len, sizeof(net_len), 0);
-        if (bytes_read <= 0)
-        { // Error or connection closed unexpectedly
-            if (bytes_read == 0)
-            {
-                printf("Server closed connection unexpectedly or sent no more data.\n");
-            }
-            else
-            {
-                perror("recv filename length");
-            }
-            break; // Exit loop
-        }
-        uint32_t name_len = ntohl(net_len);
-
-        if (name_len == 0)
-        { // Server signaled end of list
-            printf("Received zero length, end of file list.\n");
-            break; // Exit loop
-        }
-
         // Allocate buffer for filename
-        char *filename = (char *)malloc(name_len);
-        if (filename == NULL)
-        {
-            perror("malloc filename");
-            exit(1);
-        }
-
+        char filename[MAX_FILENAME];
         // Receive filename
-        bytes_read = recv_all(s, filename, name_len, 0);
+        bytes_read = recv(s, filename, MAX_FILENAME, 0);
         if (bytes_read <= 0)
         {
             if (bytes_read == 0)
             {
-                printf("Server closed connection unexpectedly after name_len.\n");
+                printf("Server closed connection.\n");
             }
             else
             {
                 perror("recv filename");
             }
-            free(filename);
             break;
         }
         // filename is already null-terminated by server if name_len includes +1
 
         printf("Client received filename: %s\n", filename);
 
-        // Receive type length
-        bytes_read = recv_all(s, &net_len, sizeof(net_len), 0);
-        if (bytes_read <= 0)
-        {
-            if (bytes_read == 0)
-            {
-                printf("Server closed connection unexpectedly after filename.\n");
-            }
-            else
-            {
-                perror("recv type length");
-            }
-            free(filename);
-            break;
-        }
-        uint32_t type_len = ntohl(net_len);
-
         // Allocate buffer for type
-        char *type = (char *)malloc(type_len);
+        char type[10];
         if (type == NULL)
         {
             perror("malloc type");
-            free(filename);
             exit(1);
         }
-
         // Receive type
-        bytes_read = recv_all(s, type, type_len, 0);
+        bytes_read = recv(s, type, 10, 0);
         if (bytes_read <= 0)
         {
             if (bytes_read == 0)
             {
                 printf("Server closed connection unexpectedly after type_len.\n");
+                break;
             }
             else
             {
                 perror("recv type");
             }
-            free(filename);
-            free(type);
             break;
         }
         // type is already null-terminated by server if type_len includes +1
-
         printf("Client received type: %s\n", type);
-
         insert_list_tree(filename, type, file_list_store); // Call without iter
-
-        free(filename);
-        free(type);
     }
-    close(s); // Close the local socket
+    close(s);  // Close the local socket
 }
 
 void viewOpeningFolder(GtkListStore *file_list_store){
+
+    // get_list_of_files(file_list_store, command, s);
 
 }
 
@@ -758,7 +732,7 @@ int main(int argc, char *argv[])
     server_addr.sin_port = htons(8080);
     server_addr.sin_addr.s_addr = inet_addr("172.29.207.94");
 
-    get_list_of_files(file_list_store); // Call without iter
+    get_list_of_files(file_list_store,"GroupA"); // Call without iter
 
     // 4. Hiển thị cửa sổ và bắt đầu vòng lặp chính của ứng dụng
     gtk_widget_show_all(window);

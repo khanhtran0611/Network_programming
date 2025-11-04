@@ -12,22 +12,26 @@
 #include <string.h>
 #include <dirent.h>
 
+#define MAX_FILE_LEN 256
+#define MAX_PATH_LEN 3072
+#define COMMAND_LENGTH 16
+
 struct sockaddr_in server_addr, client_addr;
 int s, c;
-const char *BASE_PATH = "Group_folders/GroupA/";
+char BASE_PATH[3072] = "Group_folders/";
 
 void addFile(int c)
 {
-    char filename[1024];
+    char filename[MAX_FILE_LEN];
     char buffer[10240];
-    int bytes_recv = recv(c, filename, 1024, 0);
+    int bytes_recv = recv(c, filename, MAX_FILE_LEN, 0);
     if (bytes_recv < 0)
     {
         perror("recv");
         exit(1);
     }
     filename[bytes_recv] = '\0';
-    char full_path[512];
+    char full_path[MAX_PATH_LEN + MAX_FILE_LEN];
     strcpy(full_path, BASE_PATH);
     strcat(full_path, filename);
     FILE *fp = fopen(full_path, "wb");
@@ -53,6 +57,16 @@ void get_list_of_files(int c)
 {
     DIR *d;
     struct dirent *dir;
+    char foldername[MAX_FILE_LEN];
+    int bytes_recv = recv(c, foldername, MAX_FILE_LEN, 0);
+    if (bytes_recv < 0)
+    {
+        perror("recv");
+        exit(1);
+    }
+    foldername[bytes_recv] = '\0';
+    strncat(BASE_PATH, foldername,sizeof(BASE_PATH) - strlen(BASE_PATH) - 1);
+    strncat(BASE_PATH, "/",sizeof(BASE_PATH) - strlen(BASE_PATH) - 1);
     d = opendir(BASE_PATH);
     if (d)
     {
@@ -60,16 +74,8 @@ void get_list_of_files(int c)
         {
             if (strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0)
             {
-                // Send filename length
-                uint32_t name_len = strlen(dir->d_name) + 1; // Include null terminator
-                uint32_t net_name_len = htonl(name_len);
-                if (send(c, &net_name_len, sizeof(net_name_len), 0) < 0)
-                {
-                    perror("send name_len");
-                    exit(1);
-                }
                 // Send filename
-                if (send(c, dir->d_name, name_len, 0) < 0)
+                if (send(c, dir->d_name, MAX_FILE_LEN, 0) < 0)
                 {
                     perror("send filename");
                     exit(1);
@@ -85,16 +91,8 @@ void get_list_of_files(int c)
                     type = "file";
                 }
                 printf("%s\n", type);
-                // Send type length
-                uint32_t type_len = strlen(type) + 1; // Include null terminator
-                uint32_t net_type_len = htonl(type_len);
-                if (send(c, &net_type_len, sizeof(net_type_len), 0) < 0)
-                {
-                    perror("send type_len");
-                    exit(1);
-                }
                 // Send type
-                if (send(c, type, type_len, 0) < 0)
+                if (send(c, type, 10, 0) < 0)
                 {
                     perror("send type");
                     exit(1);
@@ -104,7 +102,7 @@ void get_list_of_files(int c)
         closedir(d);
         // Signal end of list by sending a zero length for the next item
         uint32_t zero_len = htonl(0);
-        if (send(c, &zero_len, sizeof(zero_len), 0) < 0)
+        if (send(c, &zero_len, MAX_FILE_LEN, 0) < 0)
         {
             perror("send zero_len");
             exit(1);
@@ -121,100 +119,18 @@ void get_list_of_files(int c)
     }
 }
 
-void viewFolder(int c){
-    char foldername[1024];
-    int bytes_recv = recv(c, foldername, 1024, 0);
-    if (bytes_recv < 0)
-    {
-        perror("recv");
-        exit(1);
-    }
-    foldername[bytes_recv] = '\0';
-    char full_path[10240];
-    strcpy(full_path, BASE_PATH);
-    strcat(full_path, foldername);
-    DIR *d;
-    struct dirent *dir;
-    d = opendir(full_path);
-    if (d)
-    {
-        while ((dir = readdir(d)) != NULL)
-        {
-            if (strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0)
-            {
-                // Send filename length
-                uint32_t name_len = strlen(dir->d_name) + 1; // Include null terminator
-                uint32_t net_name_len = htonl(name_len);
-                if (send(c, &net_name_len, sizeof(net_name_len), 0) < 0)
-                {
-                    perror("send name_len");
-                    exit(1);
-                }
-                // Send filename
-                if (send(c, dir->d_name, name_len, 0) < 0)
-                {
-                    perror("send filename");
-                    exit(1);
-                }
-                printf("%s\n", dir->d_name);
-                char *type;
-                if (dir->d_type == DT_DIR)
-                {
-                    type = "folder";
-                }
-                else
-                {
-                    type = "file";
-                }
-                printf("%s\n", type);
-                // Send type length
-                uint32_t type_len = strlen(type) + 1; // Include null terminator
-                uint32_t net_type_len = htonl(type_len);
-                if (send(c, &net_type_len, sizeof(net_type_len), 0) < 0)
-                {
-                    perror("send type_len");
-                    exit(1);
-                }
-                // Send type
-                if (send(c, type, type_len, 0) < 0)
-                {
-                    perror("send type");
-                    exit(1);
-                }
-            }
-        }
-        closedir(d);
-        // Signal end of list by sending a zero length for the next item
-        uint32_t zero_len = htonl(0);
-        if (send(c, &zero_len, sizeof(zero_len), 0) < 0)
-        {
-            perror("send zero_len");
-            exit(1);
-        }
-        if (shutdown(c, SHUT_WR) < 0)
-        {
-            perror("shutdown");
-        }
-    }
-    else
-    {
-        perror("opendir");
-        exit(1);
-    }
-}
 
 void deleteFile(int c)
 {
-    char filename[1024];
-    char buffer[10240];
-    int bytes_recv = recv(c, filename, 1024, 0);
+    char filename[MAX_FILE_LEN];
+    int bytes_recv = recv(c, filename, MAX_FILE_LEN, 0);
     if (bytes_recv < 0)
     {
         perror("recv");
         exit(1);
     }
     filename[bytes_recv] = '\0';
-    char full_path[512];
+    char full_path[MAX_FILE_LEN + MAX_PATH_LEN];
     strcpy(full_path, BASE_PATH);
     strcat(full_path, filename);
     printf("%s\n", filename);
@@ -227,15 +143,15 @@ void deleteFile(int c)
 }
 
 void addFolder(int c){
-    char foldername[1024];
-    int bytes_recv = recv(c, foldername, 1024, 0);
+    char foldername[MAX_FILE_LEN];
+    int bytes_recv = recv(c, foldername, MAX_FILE_LEN, 0);
     if (bytes_recv < 0)
     {
         perror("recv");
         return; // Don't exit the whole server
     }
     foldername[bytes_recv] = '\0';
-    char full_path[512];
+    char full_path[MAX_FILE_LEN + MAX_PATH_LEN];
     strcpy(full_path, BASE_PATH);
     strcat(full_path, foldername);
     if (mkdir(full_path, 0755) == 0) { // Use 0755 for standard permissions
@@ -246,18 +162,18 @@ void addFolder(int c){
 }
 
 void deleteFolder(int c){
-    char foldername[1024];
-    int bytes_recv = recv(c, foldername, 1024, 0);
+    char foldername[MAX_FILE_LEN];
+    int bytes_recv = recv(c, foldername, MAX_FILE_LEN, 0);
     if (bytes_recv < 0)
     {
         perror("recv");
         return; // Don't exit the whole server
     }
     foldername[bytes_recv] = '\0';
-    char full_path[512];
+    char full_path[MAX_FILE_LEN + MAX_PATH_LEN];
     strcpy(full_path, BASE_PATH);
     strcat(full_path, foldername);
-    char command[1024];
+    char command[MAX_FILE_LEN + MAX_PATH_LEN + 16];
     strcpy(command, "rm -rf ");
     strcat(command, full_path);
     if(system(command) == 0){
@@ -268,12 +184,12 @@ void deleteFolder(int c){
 }
 
 void renameFileOrFolder(int c) {
-    char old_name[1024];
-    char new_name[1024];
+    char old_name[MAX_FILE_LEN];
+    char new_name[MAX_FILE_LEN];
     int bytes_recv;
 
     // Receive old name
-    bytes_recv = recv(c, old_name, 1024, 0);
+    bytes_recv = recv(c, old_name, MAX_FILE_LEN, 0);
     if (bytes_recv <= 0) {
         perror("recv old_name");
         return;
@@ -282,7 +198,7 @@ void renameFileOrFolder(int c) {
     printf("Received old name: %s\n", old_name);
 
     // Receive new name
-    bytes_recv = recv(c, new_name, 1024, 0);
+    bytes_recv = recv(c, new_name, MAX_FILE_LEN, 0);
     if (bytes_recv <= 0) {
         perror("recv new_name");
         return;
@@ -290,8 +206,8 @@ void renameFileOrFolder(int c) {
     printf("Received new name: %s\n", new_name);
     new_name[bytes_recv] = '\0';
 
-    char old_full_path[2048];
-    char new_full_path[2048];
+    char old_full_path[MAX_FILE_LEN + MAX_PATH_LEN];
+    char new_full_path[MAX_FILE_LEN + MAX_PATH_LEN];
 
     snprintf(old_full_path, sizeof(old_full_path), "%s%s", BASE_PATH, old_name);
     snprintf(new_full_path, sizeof(new_full_path), "%s%s", BASE_PATH, new_name);
@@ -300,16 +216,14 @@ void renameFileOrFolder(int c) {
         printf("Successfully renamed '%s' to '%s'\n", old_name, new_name);
     } else {
         perror("rename");
-        // Optionally, send an error message back to the client
     }
 }
 
 void handle_client(int c)
 {
-
     int bytes_recv;
-    char command[1024];
-    bytes_recv = recv(c, command, 1024, 0);
+    char command[COMMAND_LENGTH];
+    bytes_recv = recv(c, command, COMMAND_LENGTH, 0);
     if (bytes_recv < 0)
     {
         perror("recv");
@@ -334,9 +248,6 @@ void handle_client(int c)
     }else if (strcmp(command, "deleteFolder") == 0)
     {
         deleteFolder(c);
-    }else if (strcmp(command, "viewFolder") == 0)
-    {  
-       viewFolder(c);
     }else if (strcmp(command, "rename") == 0)
     {
        renameFileOrFolder(c);
