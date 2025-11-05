@@ -1,23 +1,27 @@
-#include <gtk/gtk.h>
-#include <stdio.h>
-#include <sys/socket.h>
+#include <arpa/inet.h>
 #include <errno.h>
-#include <stdlib.h>
+#include <gtk/gtk.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
-#include <unistd.h>
-#include <arpa/inet.h>
+#include <stdint.h>  // For uint32_t
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
-
-#include <stdint.h> // For uint32_t
+#include <sys/socket.h>
+#include <unistd.h>
 
 #define MAX_FILENAME 256
 #define MAX_PATH_LEN 3072
 #define COMMAND_LENGTH 16
 
-struct sockaddr_in server_addr; // client_addr and c are not used in client.c
-GtkListStore *file_list_store;
+char BASE_PATH[MAX_PATH_LEN] = "Group_folders/";
+char *root_path = "Group_folders/";
+char copied_path[MAX_PATH_LEN + MAX_FILE_LEN];
 
+char *download_path = "/root/Project_demo/download_folder";
+
+struct sockaddr_in server_addr;  // client_addr and c are not used in client.c
+GtkListStore *file_list_store;
 
 // A helper function to create a new row for the members list
 GtkWidget *create_member_row(const gchar *email)
@@ -54,6 +58,105 @@ GtkWidget *create_member_row(const gchar *email)
     return row;
 }
 
+void insert_list_tree(char *filename, char *type,
+                      GtkListStore *file_list_store)  // Removed iter parameter
+{
+    GtkTreeIter iter;  // Declare iter locally
+    gtk_list_store_append(file_list_store, &iter);
+    gtk_list_store_set(file_list_store, &iter, 0, filename, 1, type, -1);
+}
+
+void get_list_of_files(GtkListStore *file_list_store, char *foldername)  // Removed iter parameter
+{
+    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);  // Use local s
+    if (s == -1)
+    {
+        perror("socket");
+        exit(1);
+    }
+    if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        perror("connect");
+        exit(1);
+    }
+    if (foldername != NULL)
+    {
+        char *command = "getList";
+        if (send(s, command, COMMAND_LENGTH, 0) < 0)
+        {
+            perror("send command");
+            exit(1);
+        }
+
+        if (send(s, foldername, 1024, 0) < 0)
+        {
+            perror("send");
+            exit(1);
+        }
+    }
+    else
+    {
+        char *command = "back";
+        if (send(s, command, COMMAND_LENGTH, 0) < 0)
+        {
+            perror("send command");
+            exit(1);
+        }
+    }
+
+    ssize_t bytes_read;
+
+    while (1)  // Loop indefinitely until a zero-length is received
+    {
+        // Allocate buffer for filename
+        char filename[MAX_FILENAME];
+        // Receive filename
+        bytes_read = recv(s, filename, MAX_FILENAME, 0);
+        if (bytes_read <= 0)
+        {
+            if (bytes_read == 0)
+            {
+                printf("Server closed connection.\n");
+            }
+            else
+            {
+                perror("recv filename");
+            }
+            break;
+        }
+        // filename is already null-terminated by server if name_len includes +1
+
+        printf("Client received filename: %s\n", filename);
+
+        // Allocate buffer for type
+        char type[10];
+        if (type == NULL)
+        {
+            perror("malloc type");
+            exit(1);
+        }
+        // Receive type
+        bytes_read = recv(s, type, 10, 0);
+        if (bytes_read <= 0)
+        {
+            if (bytes_read == 0)
+            {
+                printf("Server closed connection unexpectedly after type_len.\n");
+                break;
+            }
+            else
+            {
+                perror("recv type");
+            }
+            break;
+        }
+        // type is already null-terminated by server if type_len includes +1
+        printf("Client received type: %s\n", type);
+        insert_list_tree(filename, type, file_list_store);  // Call without iter
+    }
+    close(s);  // Close the local socket
+}
+
 // Callback for the "Remove" button clicks (for demonstration)
 void on_remove_clicked(GtkButton *button, gpointer user_data)
 {
@@ -75,21 +178,14 @@ void on_upload_file_clicked(GtkButton *button, gpointer user_data)
     // Lấy cửa sổ chính để làm cha cho dialog
     GtkWidget *toplevel = gtk_widget_get_toplevel(GTK_WIDGET(button));
 
-    dialog = gtk_file_chooser_dialog_new("Open File",
-                                         GTK_WINDOW(toplevel),
-                                         action,
-                                         "_Cancel",
-                                         GTK_RESPONSE_CANCEL,
-                                         "_Open",
-                                         GTK_RESPONSE_ACCEPT,
-                                         NULL);
+    dialog = gtk_file_chooser_dialog_new("Open File", GTK_WINDOW(toplevel), action, "_Cancel",
+                                         GTK_RESPONSE_CANCEL, "_Open", GTK_RESPONSE_ACCEPT, NULL);
 
     res = gtk_dialog_run(GTK_DIALOG(dialog));
     char *filepath;
     char *my_basename;
     if (res == GTK_RESPONSE_ACCEPT)
     {
-
         GtkFileChooser *chooser = GTK_FILE_CHOOSER(dialog);
         filepath = gtk_file_chooser_get_filename(chooser);
 
@@ -118,7 +214,7 @@ void on_upload_file_clicked(GtkButton *button, gpointer user_data)
     gtk_widget_destroy(dialog);
     if (signal == 1)
     {
-        int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); // Use local s
+        int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);  // Use local s
         if (s == -1)
         {
             perror("socket");
@@ -186,14 +282,10 @@ void on_add_folder_clicked(GtkButton *button, gpointer user_data)
     GtkWidget *toplevel = gtk_widget_get_toplevel(GTK_WIDGET(button));
 
     // Tạo dialog mới với các nút "Create" và "Cancel"
-    dialog = gtk_dialog_new_with_buttons("Create New Folder",
-                                         GTK_WINDOW(toplevel),
-                                         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-                                         "_Create",
-                                         GTK_RESPONSE_ACCEPT,
-                                         "_Cancel",
-                                         GTK_RESPONSE_REJECT,
-                                         NULL);
+    dialog =
+        gtk_dialog_new_with_buttons("Create New Folder", GTK_WINDOW(toplevel),
+                                    GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "_Create",
+                                    GTK_RESPONSE_ACCEPT, "_Cancel", GTK_RESPONSE_REJECT, NULL);
 
     // Lấy vùng nội dung của dialog
     content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
@@ -208,16 +300,14 @@ void on_add_folder_clicked(GtkButton *button, gpointer user_data)
     gtk_container_add(GTK_CONTAINER(content_area), entry);
     gtk_widget_show(entry);
 
-    
-
     gint res;
     res = gtk_dialog_run(GTK_DIALOG(dialog));
     if (res == GTK_RESPONSE_ACCEPT)
     {
         const gchar *text = gtk_entry_get_text(GTK_ENTRY(entry));
-        if (text && *text) // Check if the text is not null and not empty
+        if (text && *text)  // Check if the text is not null and not empty
         {
-            foldername = g_strdup(text); // Make a copy
+            foldername = g_strdup(text);  // Make a copy
             g_print("Folder to create: %s\n", foldername);
 
             // Thêm vào giao diện trước để có cảm giác phản hồi nhanh
@@ -227,12 +317,12 @@ void on_add_folder_clicked(GtkButton *button, gpointer user_data)
             signal = 1;
         }
     }
-    char* my_folder_name = foldername;
+    char *my_folder_name = foldername;
     gtk_widget_destroy(dialog);
 
     if (signal == 1)
     {
-        int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); // Use local s
+        int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);  // Use local s
         if (s == -1)
         {
             perror("socket");
@@ -260,20 +350,130 @@ void on_add_folder_clicked(GtkButton *button, gpointer user_data)
     g_free(foldername);
 }
 
+// Callback for the folder back button
+void on_folder_back_button_clicked(GtkButton *button, gpointer user_data)
+{
+    if (file_list_store)
+    {
+        gtk_list_store_clear(file_list_store);
+    }
+    else
+    {
+        g_printerr("file_list_store is NULL. Cannot clear.\n");
+        return;
+    }
+    get_list_of_files(file_list_store, NULL);
+}
+
 // --- START: Right-click menu functions ---
+
+// Callback function when "Copy" is selected from the context menu
+void on_menu_copy_activate(GtkMenuItem *menuitem, gpointer user_data)
+{
+    int signal = 0;
+    GtkTreePath *path = (GtkTreePath *)user_data;
+    GtkWidget *menu = gtk_widget_get_parent(GTK_WIDGET(menuitem));
+    GtkTreeModel *model = (GtkTreeModel *)g_object_get_data(G_OBJECT(menu), "target-model");
+    GtkTreeIter iter;
+    gchar *filename = NULL;
+
+    if (model && path && gtk_tree_model_get_iter(model, &iter, path))
+    {
+        // Get the filename from the first column (index 0)
+        gtk_tree_model_get(model, &iter, 0, &filename, -1);
+
+        if (filename)
+        {
+            // Get the system clipboard
+            GtkClipboard *clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+            // Set the clipboard text
+            gtk_clipboard_set_text(clipboard, filename, -1);
+            g_print("Copied '%s' to clipboard.\n", filename);
+        }
+        signal = 1;
+    }
+    if (signal == 1)
+    {
+        int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);  // Use local s
+        if (s == -1)
+        {
+            perror("socket");
+            exit(1);
+        }
+        if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+        {
+            perror("connect");
+            exit(1);
+        }
+        if (send(s, "copy", COMMAND_LENGTH, 0) < 0)
+        {
+            perror("send");
+            exit(1);
+        }
+
+        if (send(s, filename, MAX_FILENAME, 0) < 0)
+        {
+            perror("send");
+            exit(1);
+        }
+        close(s);
+        signal = 0;
+    }
+    g_free(filename);
+    gtk_tree_path_free(path);
+}
 
 // Callback function when "Download" is selected from the context menu
 void on_menu_download_activate(GtkMenuItem *menuitem, gpointer user_data)
 {
     char *filename = (char *)user_data;
     g_print("Context menu: 'Download' clicked for file: %s\n", filename);
+    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);  // Use local s
+    if (s == -1)
+    {
+        perror("socket");
+        exit(1);
+    }
+    if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        perror("connect");
+        exit(1);
+    }
 
-    // TODO: Implement the download logic here.
-    // You will need to create a socket, connect to the server,
-    // send a "download" command along with the filename,
-    // and then receive the file data.
-
-    g_free(filename); // Free the duplicated filename string
+    if (send(s, "download", COMMAND_LENGTH, 0) < 0)
+    {
+        perror("send");
+        exit(1);
+    }
+    if (send(s, filename, MAX_FILENAME, 0) < 0)
+    {
+        perror("send");
+        exit(1);
+    }
+    char buffer[10240];
+    int bytes_recv;
+    char filepath[MAX_FILENAME + MAX_PATH_LEN];
+    strcpy(filepath, download_path);
+    strcat(filepath, "/");
+    strcat(filepath, filename);
+    FILE *fp = fopen(filepath, "wb");
+    if (fp == NULL)
+    {
+        perror("fopen");
+        exit(1);
+    }
+    while ((bytes_recv = recv(s, buffer, 10240, 0)) > 0)
+    {
+        printf("Wrote %d bytes \n", bytes_recv);
+        fwrite(buffer, 1, bytes_recv, fp);
+    }
+    fclose(fp);  // Di chuyển fclose() lên trước khi kiểm tra lỗi
+    if (bytes_recv < 0)
+    {
+        perror("recv");
+        exit(1);
+    }
+    g_free(filename);  // Free the duplicated filename string
 }
 
 // Callback function when "Rename" is selected from the context menu
@@ -291,18 +491,14 @@ void on_menu_rename_activate(GtkMenuItem *menuitem, gpointer user_data)
 
         // Create a dialog to get the new name
         GtkWidget *toplevel = gtk_widget_get_toplevel(GTK_WIDGET(menu));
-        GtkWidget *dialog = gtk_dialog_new_with_buttons("Rename Item",
-                                                        GTK_WINDOW(toplevel),
-                                                        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
-                                                        "_Rename", GTK_RESPONSE_ACCEPT,
-                                                        "_Cancel", GTK_RESPONSE_REJECT,
-                                                        NULL);
+        GtkWidget *dialog = gtk_dialog_new_with_buttons(
+            "Rename Item", GTK_WINDOW(toplevel), GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+            "_Rename", GTK_RESPONSE_ACCEPT, "_Cancel", GTK_RESPONSE_REJECT, NULL);
         GtkWidget *content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
         GtkWidget *entry = gtk_entry_new();
         gtk_entry_set_text(GTK_ENTRY(entry), old_filename);
         gtk_container_add(GTK_CONTAINER(content_area), entry);
         gtk_widget_show(entry);
- 
 
         int signal = 0;
 
@@ -310,51 +506,50 @@ void on_menu_rename_activate(GtkMenuItem *menuitem, gpointer user_data)
         if (response == GTK_RESPONSE_ACCEPT)
         {
             const gchar *new_filename_const = gtk_entry_get_text(GTK_ENTRY(entry));
-            if (new_filename_const && *new_filename_const && g_strcmp0(old_filename, new_filename_const) != 0)
+            if (new_filename_const && *new_filename_const &&
+                g_strcmp0(old_filename, new_filename_const) != 0)
             {
                 new_filename = g_strdup(new_filename_const);
                 g_print("Renaming '%s' to '%s'\n", old_filename, new_filename);
 
                 // Send rename command to server
-
             }
             signal = 1;
         }
 
         gtk_widget_destroy(dialog);
-        if(signal == 1){
-        int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (s == -1)
+        if (signal == 1)
         {
-            perror("socket");
-            exit(1);
-        }
-        if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-        {
-            perror("connect");
-            exit(1);
-        }
-            
-        if(send(s, "rename", COMMAND_LENGTH, 0) < 0) 
-        {
-            perror("send");
-            exit(1);
-        }
-        if(send(s, old_filename, MAX_FILENAME, 0) < 0) 
-        {
-            perror("send");
-            exit(1);
-        }
-        if(send(s, new_filename, MAX_FILENAME, 0) < 0) 
-        {
-            perror("send");
-            exit(1);
-        }
-        close(s);
+            int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            if (s == -1)
+            {
+                perror("socket");
+                exit(1);
+            }
+            if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+            {
+                perror("connect");
+                exit(1);
+            }
 
-                    // Update the model
-        gtk_list_store_set(GTK_LIST_STORE(model), &iter, 0, new_filename, -1);
-                
+            if (send(s, "rename", COMMAND_LENGTH, 0) < 0)
+            {
+                perror("send");
+                exit(1);
+            }
+            if (send(s, old_filename, MAX_FILENAME, 0) < 0)
+            {
+                perror("send");
+                exit(1);
+            }
+            if (send(s, new_filename, MAX_FILENAME, 0) < 0)
+            {
+                perror("send");
+                exit(1);
+            }
+            close(s);
+            // Update the model
+            gtk_list_store_set(GTK_LIST_STORE(model), &iter, 0, new_filename, -1);
         }
         g_free(new_filename);
         g_free(old_filename);
@@ -367,34 +562,17 @@ void on_menu_view_activate(GtkMenuItem *menuitem, gpointer user_data)
 {
     char *foldername = (char *)user_data;
     g_print("Context menu: 'View' clicked for folder: %s\n", foldername);
-        if (file_list_store) {
+    if (file_list_store)
+    {
         gtk_list_store_clear(file_list_store);
-    } else {
+    }
+    else
+    {
         g_printerr("file_list_store is NULL. Cannot clear.\n");
         g_free(foldername);
         return;
     }
-    //     int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); // Use local s
-    // if (s == -1)
-    // {
-    //     perror("socket");
-    //     exit(1);
-    // }
-    // if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    // {
-    //     perror("connect");
-    //     exit(1);
-    // }
-    // char *command = "getList";
-    // if (send(s, command, strlen(command) + 1, 0) < 0)
-    // {
-    //     perror("send command");
-    //     exit(1);
-    // }
-    // get_list_of_files(file_list_store, command, s);
-    
-    
-    // close(s);
+    get_list_of_files(file_list_store, foldername);
     g_free(foldername);
 }
 // Callback function when "Delete" is selected from the context menu
@@ -426,18 +604,21 @@ void on_menu_delete_activate(GtkMenuItem *menuitem, gpointer user_data)
             // g_free(filename);
 
             // Xác định lệnh cần gửi dựa trên loại
-            if (g_strcmp0(type, "folder") == 0) {
+            if (g_strcmp0(type, "folder") == 0)
+            {
                 command_to_send = "deleteFolder";
-            } else {
+            }
+            else
+            {
                 command_to_send = "deleteFile";
             }
-            g_free(type); // Giải phóng bộ nhớ cho 'type'
+            g_free(type);  // Giải phóng bộ nhớ cho 'type'
         }
     }
     snprintf(my_basename, sizeof(my_basename), "%s", filename);
     if (signal == 1 && command_to_send != NULL)
     {
-        int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); // Use local s
+        int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);  // Use local s
         if (s == -1)
         {
             printf("1\n");
@@ -467,32 +648,35 @@ void on_menu_delete_activate(GtkMenuItem *menuitem, gpointer user_data)
         signal = 0;
     }
     g_free(filename);
-    gtk_tree_path_free(path); // Free the path
+    gtk_tree_path_free(path);  // Free the path
 }
 
 // Callback for button press events on the TreeView
-gboolean on_files_treeview_button_press(GtkWidget *treeview, GdkEventButton *event, gpointer user_data)
+gboolean on_files_treeview_button_press(GtkWidget *treeview, GdkEventButton *event,
+                                        gpointer user_data)
 {
     // Check for a right-click (button 3)
     if (event->type == GDK_BUTTON_PRESS && event->button == 3)
     {
         GtkTreePath *path;
         // Get the path at the click coordinates. If a row is not clicked, do nothing.
-        if (gtk_tree_view_get_path_at_pos(GTK_TREE_VIEW(treeview), (gint)event->x, (gint)event->y, &path, NULL, NULL, NULL))
+        if (gtk_tree_view_get_path_at_pos(GTK_TREE_VIEW(treeview), (gint)event->x, (gint)event->y,
+                                          &path, NULL, NULL, NULL))
         {
             // Create the context menu
             GtkWidget *menu = gtk_menu_new();
 
             GtkWidget *item_view = gtk_menu_item_new_with_label("View");
             GtkWidget *item_download = gtk_menu_item_new_with_label("Download");
+            GtkWidget *item_copy = gtk_menu_item_new_with_label("Copy");
             GtkWidget *item_rename = gtk_menu_item_new_with_label("Rename");
             GtkWidget *item_delete = gtk_menu_item_new_with_label("Delete");
-            
+
             gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_view);
             gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_download);
+            gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_copy);
             gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_rename);
             gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_delete);
-            
 
             // Get filename and type to decide which items to enable
             GtkTreeModel *model = gtk_tree_view_get_model(GTK_TREE_VIEW(treeview));
@@ -503,16 +687,30 @@ gboolean on_files_treeview_button_press(GtkWidget *treeview, GdkEventButton *eve
             gtk_tree_model_get(model, &iter, 0, &filename, 1, &type, -1);
 
             // "View" is only for folders
-            if (g_strcmp0(type, "folder") != 0) {
+            if (g_strcmp0(type, "folder") != 0)
+            {
                 gtk_widget_set_sensitive(item_view, FALSE);
             }
 
+            // "Download" is only for files
+            if (g_strcmp0(type, "folder") == 0)
+            {
+                gtk_widget_set_sensitive(item_download, FALSE);
+            }
+
             // Connect signals for menu items
-            g_signal_connect(item_view, "activate", G_CALLBACK(on_menu_view_activate), g_strdup(filename));
-            g_signal_connect(item_download, "activate", G_CALLBACK(on_menu_download_activate), g_strdup(filename));
-            g_signal_connect(item_rename, "activate", G_CALLBACK(on_menu_rename_activate), gtk_tree_path_copy(path));
-            g_signal_connect(item_delete, "activate", G_CALLBACK(on_menu_delete_activate), gtk_tree_path_copy(path));
-            g_object_set_data(G_OBJECT(menu), "target-model", model); // Store model for delete callback
+            g_signal_connect(item_view, "activate", G_CALLBACK(on_menu_view_activate),
+                             g_strdup(filename));
+            g_signal_connect(item_download, "activate", G_CALLBACK(on_menu_download_activate),
+                             g_strdup(filename));
+            g_signal_connect(item_copy, "activate", G_CALLBACK(on_menu_copy_activate),
+                             gtk_tree_path_copy(path));
+            g_signal_connect(item_rename, "activate", G_CALLBACK(on_menu_rename_activate),
+                             gtk_tree_path_copy(path));
+            g_signal_connect(item_delete, "activate", G_CALLBACK(on_menu_delete_activate),
+                             gtk_tree_path_copy(path));
+            g_object_set_data(G_OBJECT(menu), "target-model",
+                              model);  // Store model for delete callback
 
             gtk_widget_show_all(menu);
             gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent *)event);
@@ -521,19 +719,33 @@ gboolean on_files_treeview_button_press(GtkWidget *treeview, GdkEventButton *eve
             g_free(type);
             gtk_tree_path_free(path);
 
-            return TRUE; // Event handled, stop propagation
+            return TRUE;  // Event handled, stop propagation
         }
     }
-    return FALSE; // Event not handled, continue propagation
+    return FALSE;  // Event not handled, continue propagation
 }
 
 // --- END: Right-click menu functions ---
 
-void insert_list_tree(char *filename, char *type, GtkListStore *file_list_store) // Removed iter parameter
+// Callback function for when the main window is closed.
+// It sends an "out" command to the server before quitting the application.
+void on_window_destroy()
 {
-    GtkTreeIter iter; // Declare iter locally
-    gtk_list_store_append(file_list_store, &iter);
-    gtk_list_store_set(file_list_store, &iter, 0, filename, 1, type, -1);
+    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == -1)
+    {
+        perror("socket on destroy");
+    }
+    if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        perror("connect on destroy");
+    }
+    if (send(s, "out", COMMAND_LENGTH, 0) < 0)
+    {
+        perror("send 'out' on destroy");
+    }
+    close(s);
+    gtk_main_quit();
 }
 
 // Helper function to ensure all bytes are received
@@ -548,7 +760,7 @@ ssize_t recv_all(int sockfd, void *buf, size_t len, int flags)
         n = recv(sockfd, (char *)buf + total_received, bytes_left, flags);
         if (n == -1)
         {
-            return -1; // Error
+            return -1;  // Error
         }
         if (n == 0)
         {
@@ -556,10 +768,10 @@ ssize_t recv_all(int sockfd, void *buf, size_t len, int flags)
             // this is an unexpected closure.
             if (total_received < len)
             {
-                errno = EPIPE; // Indicate broken pipe or unexpected EOF
+                errno = EPIPE;  // Indicate broken pipe or unexpected EOF
                 return -1;
             }
-            return total_received; // Peer closed connection after sending all data
+            return total_received;  // Peer closed connection after sending all data
         }
         total_received += n;
         bytes_left -= n;
@@ -567,94 +779,12 @@ ssize_t recv_all(int sockfd, void *buf, size_t len, int flags)
     return total_received;
 }
 
-void get_list_of_files(GtkListStore *file_list_store, char* foldername) // Removed iter parameter
-{
-    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP); // Use local s
-    if (s == -1)
-    {
-        perror("socket");
-        exit(1);
-    }
-    if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    {
-        perror("connect");
-        exit(1);
-    }
-    char *command = "getList";
-    if (send(s, command, COMMAND_LENGTH, 0) < 0)
-    {
-        perror("send command");
-        exit(1);
-    }
-    
-    if(send(s,foldername,1024,0) < 0){
-        perror("send");
-        exit(1);
-    }
-    ssize_t bytes_read;
-
-    while (1) // Loop indefinitely until a zero-length is received
-    {
-        // Allocate buffer for filename
-        char filename[MAX_FILENAME];
-        // Receive filename
-        bytes_read = recv(s, filename, MAX_FILENAME, 0);
-        if (bytes_read <= 0)
-        {
-            if (bytes_read == 0)
-            {
-                printf("Server closed connection.\n");
-            }
-            else
-            {
-                perror("recv filename");
-            }
-            break;
-        }
-        // filename is already null-terminated by server if name_len includes +1
-
-        printf("Client received filename: %s\n", filename);
-
-        // Allocate buffer for type
-        char type[10];
-        if (type == NULL)
-        {
-            perror("malloc type");
-            exit(1);
-        }
-        // Receive type
-        bytes_read = recv(s, type, 10, 0);
-        if (bytes_read <= 0)
-        {
-            if (bytes_read == 0)
-            {
-                printf("Server closed connection unexpectedly after type_len.\n");
-                break;
-            }
-            else
-            {
-                perror("recv type");
-            }
-            break;
-        }
-        // type is already null-terminated by server if type_len includes +1
-        printf("Client received type: %s\n", type);
-        insert_list_tree(filename, type, file_list_store); // Call without iter
-    }
-    close(s);  // Close the local socket
-}
-
-void viewOpeningFolder(GtkListStore *file_list_store){
-
-    // get_list_of_files(file_list_store, command, s);
-
-}
-
 int main(int argc, char *argv[])
 {
-    GtkBuilder *builder;
-    GtkWidget *window, *group_name_label, *members_listbox, *upload_button, *add_folder_button, *files_treeview;
- // Thay đổi từ GtkTreeStore sang GtkListStore
+    GtkBuilder *builder;  // Thay đổi từ GtkTreeStore sang GtkListStore
+    GtkWidget *window, *group_name_label, *members_listbox, *upload_button, *add_folder_button,
+        *files_treeview, *folder_back_button;
+    // Thay đổi từ GtkTreeStore sang GtkListStore
     // GtkTreeIter iter; // Removed iter declaration
     GError *error = NULL;
 
@@ -679,10 +809,13 @@ int main(int argc, char *argv[])
     // 3.1. Lấy con trỏ tới các widget khác bằng ID
     group_name_label = GTK_WIDGET(gtk_builder_get_object(builder, "group_name_label"));
     members_listbox = GTK_WIDGET(gtk_builder_get_object(builder, "members_listbox"));
-    file_list_store = GTK_LIST_STORE(gtk_builder_get_object(builder, "file_list_store")); // Ép kiểu sang GtkListStore
-    upload_button = GTK_WIDGET(gtk_builder_get_object(builder, "upload_file_button"));    // Giả sử ID của nút là "upload_file_button"
+    file_list_store = GTK_LIST_STORE(
+        gtk_builder_get_object(builder, "file_list_store"));  // Ép kiểu sang GtkListStore
+    upload_button = GTK_WIDGET(gtk_builder_get_object(
+        builder, "upload_file_button"));  // Giả sử ID của nút là "upload_file_button"
     add_folder_button = GTK_WIDGET(gtk_builder_get_object(builder, "add_folder_button"));
     files_treeview = GTK_WIDGET(gtk_builder_get_object(builder, "files_treeview"));
+    folder_back_button = GTK_WIDGET(gtk_builder_get_object(builder, "folder_back_button"));
 
     // 3.2. Thay đổi tên nhóm
     gtk_label_set_text(GTK_LABEL(group_name_label), "Members of 'C Project Group'");
@@ -710,7 +843,7 @@ int main(int argc, char *argv[])
         // GtkBox chứa nhiều con. Lấy danh sách các con và lấy widget cuối cùng (là button).
         GList *box_children = gtk_container_get_children(GTK_CONTAINER(box_in_row));
         GtkWidget *button = g_list_last(box_children)->data;
-        g_list_free(box_children); // Giải phóng danh sách sau khi dùng
+        g_list_free(box_children);  // Giải phóng danh sách sau khi dùng
 
         g_signal_connect(button, "clicked", G_CALLBACK(on_remove_clicked), NULL);
     }
@@ -720,19 +853,25 @@ int main(int argc, char *argv[])
 
     // Kết nối sự kiện cho nút Upload File
     g_signal_connect(upload_button, "clicked", G_CALLBACK(on_upload_file_clicked), file_list_store);
-    g_signal_connect(add_folder_button, "clicked", G_CALLBACK(on_add_folder_clicked), file_list_store);
+    g_signal_connect(add_folder_button, "clicked", G_CALLBACK(on_add_folder_clicked),
+                     file_list_store);
+
+    // Kết nối sự kiện cho nút quay lại thư mục cha
+    g_signal_connect(folder_back_button, "clicked", G_CALLBACK(on_folder_back_button_clicked),
+                     NULL);
 
     // Kết nối sự kiện click chuột cho TreeView để hiển thị menu ngữ cảnh
-    g_signal_connect(files_treeview, "button-press-event", G_CALLBACK(on_files_treeview_button_press), NULL);
+    g_signal_connect(files_treeview, "button-press-event",
+                     G_CALLBACK(on_files_treeview_button_press), NULL);
 
     // Đặt hàm xử lý sự kiện đóng cửa sổ
-    g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
+    g_signal_connect(window, "destroy", G_CALLBACK(on_window_destroy), NULL);
 
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(8080);
     server_addr.sin_addr.s_addr = inet_addr("172.29.207.94");
 
-    get_list_of_files(file_list_store,"GroupA"); // Call without iter
+    get_list_of_files(file_list_store, "GroupA");  // Call without iter
 
     // 4. Hiển thị cửa sổ và bắt đầu vòng lặp chính của ứng dụng
     gtk_widget_show_all(window);

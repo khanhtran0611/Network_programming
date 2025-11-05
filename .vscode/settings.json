@@ -1,5 +1,10 @@
 {
-    "files.associations": {
-        "string.h": "c"
-    }
+  "files.associations": {
+    "string.h": "c"
+  },
+  "[cpp]": {
+    "editor.defaultFormatter": "xaver.clang-format"
+  },
+  "editor.formatOnSave": true,
+  "clang-format.style": "file"
 }
