@@ -12,6 +12,10 @@
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "database.h"
+
+// Access database functions directly (database.c uses static db)
+extern int is_leader(int group_id, const char *email);
 
 #define MAX_FILE_LEN 256
 #define MAX_PATH_LEN 3072
@@ -303,13 +307,422 @@ void copy(int c)
         exit(1);
     }
     filename[bytes_recv] = '\0';
-    char full_path[MAX_FILE_LEN + MAX_PATH_LEN];
     strcpy(copied_path, BASE_PATH);
     strcat(copied_path, filename);
     printf("%s\n", copied_path);
 }
 
 void paste(int c) {}
+
+void createGroup(int c)
+{
+    char group_name[MAX_FILE_LEN];
+    char leader_email[MAX_EMAIL_LEN];
+    int bytes_recv;
+
+    bytes_recv = recv(c, group_name, MAX_FILE_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv group_name");
+        return;
+    }
+    group_name[bytes_recv] = '\0';
+
+    bytes_recv = recv(c, leader_email, MAX_EMAIL_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv leader_email");
+        return;
+    }
+    leader_email[bytes_recv] = '\0';
+
+    int group_id = create_group(group_name, leader_email);
+    if (group_id > 0)
+    {
+        char response[32];
+        snprintf(response, sizeof(response), "OK|%d", group_id);
+        send(c, response, sizeof(response), 0);
+        printf("Successfully created group: %s (ID: %d)\n", group_name, group_id);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+        printf("Failed to create group: %s\n", group_name);
+    }
+}
+
+void listGroups(int c)
+{
+    char buffer[8192];
+    if (list_groups(buffer, sizeof(buffer)) == 0)
+    {
+        int len = strlen(buffer);
+        send(c, buffer, len, 0);
+        printf("Sent group list to client\n");
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+    }
+}
+
+void listMembers(int c)
+{
+    char group_id_str[32];
+    int bytes_recv = recv(c, group_id_str, sizeof(group_id_str), 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv group_id");
+        return;
+    }
+    group_id_str[bytes_recv] = '\0';
+    int group_id = atoi(group_id_str);
+
+    char buffer[4096];
+    if (list_members(group_id, buffer, sizeof(buffer)) == 0)
+    {
+        int len = strlen(buffer);
+        send(c, buffer, len, 0);
+        printf("Sent member list for group %d to client\n", group_id);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+    }
+}
+
+void requestJoin(int c)
+{
+    char email[MAX_EMAIL_LEN];
+    char group_id_str[32];
+    int bytes_recv;
+
+    bytes_recv = recv(c, email, MAX_EMAIL_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv email");
+        return;
+    }
+    email[bytes_recv] = '\0';
+
+    bytes_recv = recv(c, group_id_str, sizeof(group_id_str), 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv group_id");
+        return;
+    }
+    group_id_str[bytes_recv] = '\0';
+    int group_id = atoi(group_id_str);
+
+    if (create_request(email, group_id) == 0)
+    {
+        send(c, "OK", 3, 0);
+        printf("Request created: %s -> group %d\n", email, group_id);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+        printf("Failed to create request: %s -> group %d\n", email, group_id);
+    }
+}
+
+void approveRequest(int c)
+{
+    char request_id_str[32];
+    char email[MAX_EMAIL_LEN];
+    int bytes_recv = recv(c, request_id_str, sizeof(request_id_str), 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv request_id");
+        return;
+    }
+    request_id_str[bytes_recv] = '\0';
+    int request_id = atoi(request_id_str);
+
+    // Get email to verify leader
+    bytes_recv = recv(c, email, MAX_EMAIL_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv email");
+        return;
+    }
+    email[bytes_recv] = '\0';
+    int email_len = strlen(email);
+    for (int i = email_len - 1; i >= 0 && (email[i] == ' ' || email[i] == '\0' || email[i] == '\n'); i--)
+    {
+        email[i] = '\0';
+    }
+
+    // Get group_id from request to check if user is leader
+    int group_id = get_request_group_id(request_id);
+
+    // Verify user is leader
+    if (group_id > 0 && !is_leader(group_id, email))
+    {
+        send(c, "ERROR|NOT_LEADER", 16, 0);
+        printf("User %s is not leader of group %d, cannot approve request %d\n", email, group_id,
+               request_id);
+        return;
+    }
+
+    if (approve_request(request_id) == 0)
+    {
+        send(c, "OK", 3, 0);
+        printf("Request %d approved by %s\n", request_id, email);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+        printf("Failed to approve request %d\n", request_id);
+    }
+}
+
+void listRequests(int c)
+{
+    char group_id_str[32];
+    int bytes_recv = recv(c, group_id_str, sizeof(group_id_str), 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv group_id");
+        return;
+    }
+    group_id_str[bytes_recv] = '\0';
+    int group_id = atoi(group_id_str);
+
+    char buffer[4096];
+    if (list_requests(group_id, buffer, sizeof(buffer)) == 0)
+    {
+        int len = strlen(buffer);
+        send(c, buffer, len, 0);
+        printf("Sent request list for group %d to client\n", group_id);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+    }
+}
+
+void leaveGroup(int c)
+{
+    char email[MAX_EMAIL_LEN];
+    char group_id_str[32];
+    int bytes_recv;
+
+    bytes_recv = recv(c, email, MAX_EMAIL_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv email");
+        return;
+    }
+    email[bytes_recv] = '\0';
+
+    bytes_recv = recv(c, group_id_str, sizeof(group_id_str), 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv group_id");
+        return;
+    }
+    group_id_str[bytes_recv] = '\0';
+    int group_id = atoi(group_id_str);
+
+    // Check if user is leader
+    if (is_leader(group_id, email))
+    {
+        send(c, "ERROR|LEADER", 13, 0);
+        printf("Cannot remove leader from group %d\n", group_id);
+        return;
+    }
+
+    if (remove_member(group_id, email) == 0)
+    {
+        send(c, "OK", 3, 0);
+        printf("User %s left group %d\n", email, group_id);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+        printf("Failed to remove user %s from group %d\n", email, group_id);
+    }
+}
+
+void loginUser(int c)
+{
+    char email[MAX_EMAIL_LEN];
+    char password_buf[MAX_FILE_LEN];  // Match client's MAX_FILENAME
+    int bytes_recv;
+
+    bytes_recv = recv(c, email, MAX_EMAIL_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv email");
+        return;
+    }
+    email[bytes_recv] = '\0';
+    // Trim trailing spaces/null bytes
+    int email_len = strlen(email);
+    for (int i = email_len - 1; i >= 0 && (email[i] == ' ' || email[i] == '\0' || email[i] == '\n'); i--)
+    {
+        email[i] = '\0';
+    }
+
+    bytes_recv = recv(c, password_buf, MAX_FILE_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv password");
+        return;
+    }
+    password_buf[bytes_recv] = '\0';
+    
+    // Extract actual password (trim null bytes and spaces)
+    char password[32] = {0};
+    int j = 0;
+    for (int i = 0; i < bytes_recv && j < 31; i++)
+    {
+        if (password_buf[i] != '\0' && password_buf[i] != ' ' && password_buf[i] != '\n')
+        {
+            password[j++] = password_buf[i];
+        }
+        else if (j > 0)  // Stop at first null/space after content
+        {
+            break;
+        }
+    }
+    password[j] = '\0';
+
+    printf("Login attempt: email='%s', password='%s' (len=%d)\n", email, password, (int)strlen(password));
+
+    char username[MAX_USERNAME_LEN];
+    if (verify_login(email, password, username, sizeof(username)) == 0)
+    {
+        char response[256];
+        snprintf(response, sizeof(response), "OK|%s|%s", email, username);
+        send(c, response, strlen(response) + 1, 0);
+        printf("User %s logged in successfully\n", email);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+        printf("Login failed for %s (password: '%s')\n", email, password);
+    }
+}
+
+void registerUser(int c)
+{
+    char email[MAX_EMAIL_LEN];
+    char password_buf[MAX_FILE_LEN];
+    char username_buf[MAX_FILE_LEN];
+    int bytes_recv;
+
+    bytes_recv = recv(c, email, MAX_EMAIL_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv email");
+        return;
+    }
+    email[bytes_recv] = '\0';
+    int email_len = strlen(email);
+    for (int i = email_len - 1; i >= 0 && (email[i] == ' ' || email[i] == '\0' || email[i] == '\n'); i--)
+    {
+        email[i] = '\0';
+    }
+
+    bytes_recv = recv(c, password_buf, MAX_FILE_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv password");
+        return;
+    }
+    password_buf[bytes_recv] = '\0';
+    char password[32] = {0};
+    int j = 0;
+    for (int i = 0; i < bytes_recv && j < 31; i++)
+    {
+        if (password_buf[i] != '\0' && password_buf[i] != ' ' && password_buf[i] != '\n')
+        {
+            password[j++] = password_buf[i];
+        }
+        else if (j > 0)
+        {
+            break;
+        }
+    }
+    password[j] = '\0';
+
+    bytes_recv = recv(c, username_buf, MAX_FILE_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv username");
+        return;
+    }
+    username_buf[bytes_recv] = '\0';
+    char username[MAX_USERNAME_LEN] = {0};
+    j = 0;
+    for (int i = 0; i < bytes_recv && j < MAX_USERNAME_LEN - 1; i++)
+    {
+        if (username_buf[i] != '\0' && username_buf[i] != ' ' && username_buf[i] != '\n')
+        {
+            username[j++] = username_buf[i];
+        }
+        else if (j > 0)
+        {
+            break;
+        }
+    }
+    username[j] = '\0';
+
+    printf("Register attempt: email='%s', username='%s'\n", email, username);
+
+    if (register_user(email, password, username) == 0)
+    {
+        char response[256];
+        snprintf(response, sizeof(response), "OK|%s|%s", email, username);
+        send(c, response, strlen(response) + 1, 0);
+        printf("User %s registered successfully\n", email);
+    }
+    else
+    {
+        send(c, "ERROR|EXISTS", 13, 0);
+        printf("Registration failed for %s (user may already exist)\n", email);
+    }
+}
+
+void checkLeader(int c)
+{
+    char group_id_str[32];
+    char email[MAX_EMAIL_LEN];
+    int bytes_recv;
+
+    bytes_recv = recv(c, group_id_str, sizeof(group_id_str), 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv group_id");
+        return;
+    }
+    group_id_str[bytes_recv] = '\0';
+    int group_id = atoi(group_id_str);
+
+    bytes_recv = recv(c, email, MAX_EMAIL_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv email");
+        return;
+    }
+    email[bytes_recv] = '\0';
+    int email_len = strlen(email);
+    for (int i = email_len - 1; i >= 0 && (email[i] == ' ' || email[i] == '\0' || email[i] == '\n'); i--)
+    {
+        email[i] = '\0';
+    }
+
+    if (is_leader(group_id, email))
+    {
+        send(c, "YES", 4, 0);
+    }
+    else
+    {
+        send(c, "NO", 3, 0);
+    }
+}
 
 void handle_client(int c)
 {
@@ -322,6 +735,12 @@ void handle_client(int c)
         exit(1);
     }
     command[bytes_recv] = '\0';
+    // Trim trailing whitespace and null bytes
+    int cmd_len = strlen(command);
+    for (int i = cmd_len - 1; i >= 0 && (command[i] == ' ' || command[i] == '\0' || command[i] == '\n' || command[i] == '\r'); i--)
+    {
+        command[i] = '\0';
+    }
     printf("Received command: %s\n", command);
     if (strcmp(command, "addFile") == 0)
     {
@@ -365,6 +784,46 @@ void handle_client(int c)
     else if (strcmp(command, "paste") == 0)
     {
     }
+    else if (strcmp(command, "CREATE_GROUP") == 0)
+    {
+        createGroup(c);
+    }
+    else if (strcmp(command, "LIST_GROUP") == 0)
+    {
+        listGroups(c);
+    }
+    else if (strcmp(command, "LIST_MEMBERS") == 0)
+    {
+        listMembers(c);
+    }
+    else if (strcmp(command, "REQUEST_JOIN") == 0)
+    {
+        requestJoin(c);
+    }
+    else if (strcmp(command, "APPROVE_REQ") == 0)
+    {
+        approveRequest(c);
+    }
+    else if (strcmp(command, "LIST_REQUESTS") == 0)
+    {
+        listRequests(c);
+    }
+    else if (strcmp(command, "LEAVE_GROUP") == 0)
+    {
+        leaveGroup(c);
+    }
+    else if (strcmp(command, "LOGIN") == 0)
+    {
+        loginUser(c);
+    }
+    else if (strcmp(command, "REGISTER") == 0)
+    {
+        registerUser(c);
+    }
+    else if (strcmp(command, "CHECK_LEADER") == 0)
+    {
+        checkLeader(c);
+    }
     else
     {
         printf("Unknown command: %s\n", command);
@@ -373,6 +832,13 @@ void handle_client(int c)
 
 int main()
 {
+    // Initialize database
+    if (init_database() != 0)
+    {
+        fprintf(stderr, "Failed to initialize database\n");
+        return 1;
+    }
+
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(8080);
     server_addr.sin_addr.s_addr = INADDR_ANY;
@@ -397,7 +863,7 @@ int main()
     }
     while (1)
     {
-        int clen = sizeof(struct sockaddr);
+        socklen_t clen = sizeof(struct sockaddr);
         c = accept(s, (struct sockaddr *)&client_addr, &clen);
         if (c < 0)
         {
