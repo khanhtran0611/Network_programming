@@ -13,7 +13,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define MAX_FILE_LEN 256
+#define MAX_FILENAME 256
 #define MAX_PATH_LEN 3072
 #define COMMAND_LENGTH 16
 
@@ -21,22 +21,19 @@ struct sockaddr_in server_addr, client_addr;
 int s, c;
 char BASE_PATH[MAX_PATH_LEN] = "Group_folders/";
 char *root_path = "Group_folders/";
-char copied_path[MAX_PATH_LEN + MAX_FILE_LEN];
+char copied_path[MAX_PATH_LEN + MAX_FILENAME];
 
 void addFile(int c)
 {
-    char filename[MAX_FILE_LEN];
+    char full_path[MAX_PATH_LEN + MAX_FILENAME];
     char buffer[10240];
-    int bytes_recv = recv(c, filename, MAX_FILE_LEN, 0);
+    int bytes_recv = recv(c, full_path, MAX_PATH_LEN + MAX_FILENAME, 0);
     if (bytes_recv < 0)
     {
         perror("recv");
         exit(1);
     }
-    filename[bytes_recv] = '\0';
-    char full_path[MAX_PATH_LEN + MAX_FILE_LEN];
-    strcpy(full_path, BASE_PATH);
-    strcat(full_path, filename);
+    full_path[bytes_recv] = '\0';
     FILE *fp = fopen(full_path, "wb");
     if (fp == NULL)
     {
@@ -53,7 +50,7 @@ void addFile(int c)
         perror("recv");
         exit(1);
     }
-    printf("Sucessfully uploaded file : %s\n", filename);
+    printf("Sucessfully uploaded file : %s\n", full_path);
 }
 
 void viewFolder(int c, char *full_path)
@@ -68,7 +65,7 @@ void viewFolder(int c, char *full_path)
             if (strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0)
             {
                 // Send filename
-                if (send(c, dir->d_name, MAX_FILE_LEN, 0) < 0)
+                if (send(c, dir->d_name, MAX_FILENAME, 0) < 0)
                 {
                     perror("send filename");
                     exit(1);
@@ -95,7 +92,7 @@ void viewFolder(int c, char *full_path)
         closedir(d);
         // Signal end of list by sending a zero length for the next item
         uint32_t zero_len = htonl(0);
-        if (send(c, &zero_len, MAX_FILE_LEN, 0) < 0)
+        if (send(c, &zero_len, MAX_FILENAME, 0) < 0)
         {
             perror("send zero_len");
             exit(1);
@@ -114,17 +111,17 @@ void viewFolder(int c, char *full_path)
 
 void get_list_of_files(int c)
 {
-    char foldername[MAX_FILE_LEN];
-    int bytes_recv = recv(c, foldername, MAX_FILE_LEN, 0);
+    char folderpath[MAX_PATH_LEN];
+    int bytes_recv = recv(c, folderpath, MAX_PATH_LEN, 0);
     if (bytes_recv < 0)
     {
         perror("recv");
         exit(1);
     }
-    foldername[bytes_recv] = '\0';
-    strncat(BASE_PATH, foldername, sizeof(BASE_PATH) - strlen(BASE_PATH) - 1);
-    strncat(BASE_PATH, "/", sizeof(BASE_PATH) - strlen(BASE_PATH) - 1);
-    viewFolder(c, BASE_PATH);
+    folderpath[bytes_recv] = '\0';
+    // strncat(BASE_PATH, foldername, sizeof(BASE_PATH) - strlen(BASE_PATH) - 1);
+    // strncat(BASE_PATH, "/", sizeof(BASE_PATH) - strlen(BASE_PATH) - 1);
+    viewFolder(c, folderpath);
 }
 
 void back(int c)
@@ -138,42 +135,36 @@ void back(int c)
 
 void deleteFile(int c)
 {
-    char filename[MAX_FILE_LEN];
-    int bytes_recv = recv(c, filename, MAX_FILE_LEN, 0);
+    char full_path[MAX_FILENAME + MAX_PATH_LEN];
+    int bytes_recv = recv(c, full_path, MAX_FILENAME + MAX_PATH_LEN, 0);
     if (bytes_recv < 0)
     {
         perror("recv");
         exit(1);
     }
-    filename[bytes_recv] = '\0';
-    char full_path[MAX_FILE_LEN + MAX_PATH_LEN];
-    strcpy(full_path, BASE_PATH);
-    strcat(full_path, filename);
-    printf("%s\n", filename);
+    full_path[bytes_recv] = '\0';
+
     if (remove(full_path) != 0)
     {
         perror("remove");
         exit(1);
     }
-    printf("Sucessfully deleted file : %s\n", filename);
+    printf("Sucessfully deleted file : %s\n", full_path);
 }
 
 void addFolder(int c)
 {
-    char foldername[MAX_FILE_LEN];
-    int bytes_recv = recv(c, foldername, MAX_FILE_LEN, 0);
+    char full_path[MAX_FILENAME + MAX_PATH_LEN];
+    int bytes_recv = recv(c, full_path, MAX_FILENAME + MAX_PATH_LEN, 0);
     if (bytes_recv < 0)
     {
         perror("recv");
         return;  // Don't exit the whole server
     }
-    foldername[bytes_recv] = '\0';
-    char full_path[MAX_FILE_LEN + MAX_PATH_LEN];
-    strcpy(full_path, BASE_PATH);
-    strcat(full_path, foldername);
+    full_path[bytes_recv] = '\0';
     if (mkdir(full_path, 0755) == 0)
     {  // Use 0755 for standard permissions
-        printf("Successfully created folder: %s\n", foldername);
+        printf("Successfully created folder: %s\n", full_path);
     }
     else
     {
@@ -183,23 +174,20 @@ void addFolder(int c)
 
 void deleteFolder(int c)
 {
-    char foldername[MAX_FILE_LEN];
-    int bytes_recv = recv(c, foldername, MAX_FILE_LEN, 0);
+    char full_path[MAX_FILENAME + MAX_PATH_LEN];
+    int bytes_recv = recv(c, full_path, MAX_FILENAME + MAX_PATH_LEN, 0);
     if (bytes_recv < 0)
     {
         perror("recv");
         return;  // Don't exit the whole server
     }
-    foldername[bytes_recv] = '\0';
-    char full_path[MAX_FILE_LEN + MAX_PATH_LEN];
-    strcpy(full_path, BASE_PATH);
-    strcat(full_path, foldername);
-    char command[MAX_FILE_LEN + MAX_PATH_LEN + 16];
+    full_path[bytes_recv] = '\0';
+    char command[MAX_FILENAME + MAX_PATH_LEN + 16];
     strcpy(command, "rm -rf ");
     strcat(command, full_path);
     if (system(command) == 0)
     {
-        printf("Successfully deleted folder: %s\n", foldername);
+        printf("Successfully deleted folder: %s\n", full_path);
     }
     else
     {
@@ -209,39 +197,33 @@ void deleteFolder(int c)
 
 void renameFileOrFolder(int c)
 {
-    char old_name[MAX_FILE_LEN];
-    char new_name[MAX_FILE_LEN];
+    char old_full_path[MAX_FILENAME + MAX_PATH_LEN];
+    char new_full_path[MAX_FILENAME + MAX_PATH_LEN];
     int bytes_recv;
 
     // Receive old name
-    bytes_recv = recv(c, old_name, MAX_FILE_LEN, 0);
+    bytes_recv = recv(c, old_full_path, MAX_FILENAME + MAX_PATH_LEN, 0);
     if (bytes_recv <= 0)
     {
         perror("recv old_name");
         return;
     }
-    old_name[bytes_recv] = '\0';
-    printf("Received old name: %s\n", old_name);
+    old_full_path[bytes_recv] = '\0';
+    printf("Received old name: %s\n", old_full_path);
 
     // Receive new name
-    bytes_recv = recv(c, new_name, MAX_FILE_LEN, 0);
+    bytes_recv = recv(c, new_full_path, MAX_FILENAME + MAX_PATH_LEN, 0);
     if (bytes_recv <= 0)
     {
         perror("recv new_name");
         return;
     }
-    printf("Received new name: %s\n", new_name);
-    new_name[bytes_recv] = '\0';
-
-    char old_full_path[MAX_FILE_LEN + MAX_PATH_LEN];
-    char new_full_path[MAX_FILE_LEN + MAX_PATH_LEN];
-
-    snprintf(old_full_path, sizeof(old_full_path), "%s%s", BASE_PATH, old_name);
-    snprintf(new_full_path, sizeof(new_full_path), "%s%s", BASE_PATH, new_name);
+    printf("Received new name: %s\n", new_full_path);
+    new_full_path[bytes_recv] = '\0';
 
     if (rename(old_full_path, new_full_path) == 0)
     {
-        printf("Successfully renamed '%s' to '%s'\n", old_name, new_name);
+        printf("Successfully renamed '%s' to '%s'\n", old_full_path, new_full_path);
     }
     else
     {
@@ -251,18 +233,15 @@ void renameFileOrFolder(int c)
 
 void download(int c)
 {
-    printf("1\n");
-    char filename[MAX_FILE_LEN];
-    int bytes_recv = recv(c, filename, MAX_FILE_LEN, 0);
+    char full_path[MAX_FILENAME + MAX_PATH_LEN];
+    char filename[MAX_FILENAME];
+    int bytes_recv = recv(c, full_path, MAX_FILENAME + MAX_PATH_LEN, 0);
     if (bytes_recv < 0)
     {
         perror("recv");
         exit(1);
     }
-    filename[bytes_recv] = '\0';
-    char full_path[MAX_FILE_LEN + MAX_PATH_LEN];
-    strcpy(full_path, BASE_PATH);
-    strcat(full_path, filename);
+    full_path[bytes_recv] = '\0';
     printf("%s\n", full_path);
     FILE *fp = fopen(full_path, "rb");
     if (fp == NULL)
@@ -286,27 +265,6 @@ void download(int c)
         perror("shutdown");
     }
     fclose(fp);
-}
-
-void out(int c)
-{
-    strcpy(BASE_PATH, root_path);
-}
-
-void copy(int c)
-{
-    char filename[MAX_FILE_LEN];
-    int bytes_recv = recv(c, filename, MAX_FILE_LEN, 0);
-    if (bytes_recv < 0)
-    {
-        perror("recv");
-        exit(1);
-    }
-    filename[bytes_recv] = '\0';
-    char full_path[MAX_FILE_LEN + MAX_PATH_LEN];
-    strcpy(copied_path, BASE_PATH);
-    strcat(copied_path, filename);
-    printf("%s\n", copied_path);
 }
 
 void paste(int c) {}
@@ -354,13 +312,6 @@ void handle_client(int c)
     else if (strcmp(command, "download") == 0)
     {
         download(c);
-    }
-    else if (strcmp(command, "out") == 0)
-    {
-        out(c);
-    }
-    else if (strcmp(command, "copy") == 0)
-    {
     }
     else if (strcmp(command, "paste") == 0)
     {

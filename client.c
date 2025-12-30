@@ -1,6 +1,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <gtk/gtk.h>
+#include <libgen.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <stdint.h>  // For uint32_t
@@ -16,7 +17,7 @@
 
 char BASE_PATH[MAX_PATH_LEN] = "Group_folders/";
 char *root_path = "Group_folders/";
-char copied_path[MAX_PATH_LEN + MAX_FILE_LEN];
+char copied_path[MAX_PATH_LEN + MAX_FILENAME];
 
 char *download_path = "/root/Project_demo/download_folder";
 
@@ -66,7 +67,7 @@ void insert_list_tree(char *filename, char *type,
     gtk_list_store_set(file_list_store, &iter, 0, filename, 1, type, -1);
 }
 
-void get_list_of_files(GtkListStore *file_list_store, char *foldername)  // Removed iter parameter
+void get_list_of_files(GtkListStore *file_list_store)  // Removed iter parameter
 {
     int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);  // Use local s
     if (s == -1)
@@ -79,29 +80,20 @@ void get_list_of_files(GtkListStore *file_list_store, char *foldername)  // Remo
         perror("connect");
         exit(1);
     }
-    if (foldername != NULL)
-    {
-        char *command = "getList";
-        if (send(s, command, COMMAND_LENGTH, 0) < 0)
-        {
-            perror("send command");
-            exit(1);
-        }
 
-        if (send(s, foldername, 1024, 0) < 0)
-        {
-            perror("send");
-            exit(1);
-        }
-    }
-    else
+    char *command = "getList";
+    if (send(s, command, COMMAND_LENGTH, 0) < 0)
     {
-        char *command = "back";
-        if (send(s, command, COMMAND_LENGTH, 0) < 0)
-        {
-            perror("send command");
-            exit(1);
-        }
+        perror("send command");
+        exit(1);
+    }
+
+
+
+    if (send(s, BASE_PATH, MAX_PATH_LEN, 0) < 0)
+    {
+        perror("send");
+        exit(1);
     }
 
     ssize_t bytes_read;
@@ -225,13 +217,16 @@ void on_upload_file_clicked(GtkButton *button, gpointer user_data)
             perror("connect");
             exit(1);
         }
+        char full_path[MAX_PATH_LEN + MAX_FILENAME];
+        strcpy(full_path, BASE_PATH);
+        strcat(full_path, my_basename);
 
         if (send(s, "addFile", COMMAND_LENGTH, 0) < 0)
         {
             perror("send");
             exit(1);
         }
-        if (send(s, my_basename, MAX_FILENAME, 0) < 0)
+        if (send(s, full_path, MAX_PATH_LEN + MAX_FILENAME, 0) < 0)
         {
             perror("send");
             exit(1);
@@ -339,7 +334,11 @@ void on_add_folder_clicked(GtkButton *button, gpointer user_data)
             exit(1);
         }
 
-        if (send(s, my_folder_name, MAX_FILENAME, 0) < 0)
+        char folder_path[MAX_FILENAME + MAX_PATH_LEN];
+        strcpy(folder_path, BASE_PATH);
+        strcat(folder_path, my_folder_name);
+
+        if (send(s, folder_path, MAX_FILENAME + MAX_PATH_LEN, 0) < 0)
         {
             perror("send");
             exit(1);
@@ -362,7 +361,9 @@ void on_folder_back_button_clicked(GtkButton *button, gpointer user_data)
         g_printerr("file_list_store is NULL. Cannot clear.\n");
         return;
     }
-    get_list_of_files(file_list_store, NULL);
+    dirname(BASE_PATH);
+    strcat(BASE_PATH, "/");
+    get_list_of_files(file_list_store);
 }
 
 // --- START: Right-click menu functions ---
@@ -392,34 +393,7 @@ void on_menu_copy_activate(GtkMenuItem *menuitem, gpointer user_data)
         }
         signal = 1;
     }
-    if (signal == 1)
-    {
-        int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);  // Use local s
-        if (s == -1)
-        {
-            perror("socket");
-            exit(1);
-        }
-        if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-        {
-            perror("connect");
-            exit(1);
-        }
-        if (send(s, "copy", COMMAND_LENGTH, 0) < 0)
-        {
-            perror("send");
-            exit(1);
-        }
 
-        if (send(s, filename, MAX_FILENAME, 0) < 0)
-        {
-            perror("send");
-            exit(1);
-        }
-        close(s);
-        signal = 0;
-    }
-    g_free(filename);
     gtk_tree_path_free(path);
 }
 
@@ -445,7 +419,11 @@ void on_menu_download_activate(GtkMenuItem *menuitem, gpointer user_data)
         perror("send");
         exit(1);
     }
-    if (send(s, filename, MAX_FILENAME, 0) < 0)
+    char full_path[MAX_FILENAME + MAX_PATH_LEN];
+    strcpy(full_path, BASE_PATH);
+    strcat(full_path, filename);
+
+    if (send(s, full_path, MAX_FILENAME + MAX_PATH_LEN, 0) < 0)
     {
         perror("send");
         exit(1);
@@ -537,12 +515,19 @@ void on_menu_rename_activate(GtkMenuItem *menuitem, gpointer user_data)
                 perror("send");
                 exit(1);
             }
-            if (send(s, old_filename, MAX_FILENAME, 0) < 0)
+
+            char old_full_path[MAX_FILENAME + MAX_PATH_LEN];
+            char new_full_path[MAX_FILENAME + MAX_PATH_LEN];
+
+            snprintf(old_full_path, sizeof(old_full_path), "%s%s", BASE_PATH, old_filename);
+            snprintf(new_full_path, sizeof(new_full_path), "%s%s", BASE_PATH, new_filename);
+
+            if (send(s, old_full_path, MAX_FILENAME + MAX_PATH_LEN, 0) < 0)
             {
                 perror("send");
                 exit(1);
             }
-            if (send(s, new_filename, MAX_FILENAME, 0) < 0)
+            if (send(s, new_full_path, MAX_FILENAME + MAX_PATH_LEN, 0) < 0)
             {
                 perror("send");
                 exit(1);
@@ -572,7 +557,9 @@ void on_menu_view_activate(GtkMenuItem *menuitem, gpointer user_data)
         g_free(foldername);
         return;
     }
-    get_list_of_files(file_list_store, foldername);
+    strncat(BASE_PATH, foldername, sizeof(BASE_PATH) - strlen(BASE_PATH) - 1);
+    strncat(BASE_PATH, "/", sizeof(BASE_PATH) - strlen(BASE_PATH) - 1);
+    get_list_of_files(file_list_store);
     g_free(foldername);
 }
 // Callback function when "Delete" is selected from the context menu
@@ -638,7 +625,11 @@ void on_menu_delete_activate(GtkMenuItem *menuitem, gpointer user_data)
             exit(1);
         }
 
-        if (send(s, my_basename, MAX_FILENAME, 0) < 0)
+        char full_path[MAX_FILENAME + MAX_PATH_LEN];
+        strcpy(full_path, BASE_PATH);
+        strcat(full_path, my_basename);
+
+        if (send(s, full_path, MAX_PATH_LEN + MAX_FILENAME, 0) < 0)
         {
             printf("4\n");
             perror("send");
@@ -731,20 +722,6 @@ gboolean on_files_treeview_button_press(GtkWidget *treeview, GdkEventButton *eve
 // It sends an "out" command to the server before quitting the application.
 void on_window_destroy()
 {
-    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-    if (s == -1)
-    {
-        perror("socket on destroy");
-    }
-    if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
-    {
-        perror("connect on destroy");
-    }
-    if (send(s, "out", COMMAND_LENGTH, 0) < 0)
-    {
-        perror("send 'out' on destroy");
-    }
-    close(s);
     gtk_main_quit();
 }
 
@@ -870,8 +847,8 @@ int main(int argc, char *argv[])
     server_addr.sin_family = AF_INET;
     server_addr.sin_port = htons(8080);
     server_addr.sin_addr.s_addr = inet_addr("172.29.207.94");
-
-    get_list_of_files(file_list_store, "GroupA");  // Call without iter
+    strcat(BASE_PATH, "GroupA/");
+    get_list_of_files(file_list_store);  // Call without iter
 
     // 4. Hiển thị cửa sổ và bắt đầu vòng lặp chính của ứng dụng
     gtk_widget_show_all(window);
