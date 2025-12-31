@@ -34,6 +34,37 @@ void addFile(int c)
         exit(1);
     }
     full_path[bytes_recv] = '\0';
+    char temp[MAX_FILENAME + MAX_PATH_LEN];
+    strcpy(temp, full_path);
+    printf("%s\n", temp);
+    char duplicate_signal[20];
+    while (access(temp, F_OK) == 0)
+    {
+        strcpy(duplicate_signal, "duplicate");
+        if (send(c, duplicate_signal, 20, 0) < 0)
+        {
+            perror("send");
+            exit(1);
+        }
+        bytes_recv = recv(c, temp, MAX_FILENAME + MAX_PATH_LEN, 0);
+        if (bytes_recv < 0)
+        {
+            perror("recv");
+            exit(1);
+        }
+        if (bytes_recv == 0)
+        {
+            return;
+        }
+    }
+    strcpy(duplicate_signal, "ok");
+    if (send(c, duplicate_signal, 20, 0) < 0)
+    {
+        perror("send");
+        exit(1);
+    }
+    strcpy(full_path, temp);
+
     FILE *fp = fopen(full_path, "wb");
     if (fp == NULL)
     {
@@ -162,6 +193,36 @@ void addFolder(int c)
         return;  // Don't exit the whole server
     }
     full_path[bytes_recv] = '\0';
+    char temp[MAX_FILENAME + MAX_PATH_LEN];
+    strcpy(temp, full_path);
+    printf("%s\n", temp);
+    char duplicate_signal[20];
+    while (access(temp, F_OK) == 0)
+    {
+        strcpy(duplicate_signal, "duplicate");
+        if (send(c, duplicate_signal, 20, 0) < 0)
+        {
+            perror("send");
+            exit(1);
+        }
+        bytes_recv = recv(c, temp, MAX_FILENAME + MAX_PATH_LEN, 0);
+        if (bytes_recv < 0)
+        {
+            perror("recv");
+            exit(1);
+        }
+        if (bytes_recv == 0)
+        {
+            return;
+        }
+    }
+    strcpy(duplicate_signal, "ok");
+    if (send(c, duplicate_signal, 20, 0) < 0)
+    {
+        perror("send");
+        exit(1);
+    }
+    strcpy(full_path, temp);
     if (mkdir(full_path, 0755) == 0)
     {  // Use 0755 for standard permissions
         printf("Successfully created folder: %s\n", full_path);
@@ -265,9 +326,71 @@ void download(int c)
         perror("shutdown");
     }
     fclose(fp);
+    printf("Successfully downloaded file: %s\n", full_path);
 }
 
-void paste(int c) {}
+void paste(int c)
+{
+    char currentpath[MAX_PATH_LEN + MAX_FILENAME];
+    int bytes_recv = recv(c, currentpath, MAX_PATH_LEN + MAX_FILENAME, 0);
+    if (bytes_recv < 0)
+    {
+        perror("recv");
+        exit(1);
+    }
+    currentpath[bytes_recv] = '\0';
+    char copied_path[MAX_FILENAME + MAX_PATH_LEN];
+    bytes_recv = recv(c, copied_path, MAX_FILENAME + MAX_PATH_LEN, 0);
+    if (bytes_recv < 0)
+    {
+        perror("recv");
+        exit(1);
+    }
+    copied_path[bytes_recv] = '\0';
+    char temp[MAX_FILENAME + MAX_PATH_LEN];
+    strcpy(temp, currentpath);
+    printf("%s\n%s\n", copied_path, temp);
+    char duplicate_signal[20];
+    while (access(temp, F_OK) == 0)
+    {
+        strcpy(duplicate_signal, "duplicate");
+        if (send(c, duplicate_signal, 20, 0) < 0)
+        {
+            perror("send");
+            exit(1);
+        }
+        bytes_recv = recv(c, temp, MAX_FILENAME + MAX_PATH_LEN, 0);
+        if (bytes_recv < 0)
+        {
+            perror("recv");
+            exit(1);
+        }
+        if (bytes_recv == 0)
+        {
+            return;
+        }
+    }
+    strcpy(duplicate_signal, "ok");
+    if (send(c, duplicate_signal, 20, 0) < 0)
+    {
+        perror("send");
+        exit(1);
+    }
+    strcpy(currentpath, temp);
+    char command[MAX_FILENAME + MAX_PATH_LEN + 16];
+    strcpy(command, "cp -r ");
+    strcat(command, copied_path);
+    strcat(command, " ");
+    strcat(command, currentpath);
+    if (system(command) == 0)
+    {
+        printf("Successfully pasted to: %s\n", currentpath);
+    }
+    else
+    {
+        perror("system");
+    }
+}
 
 void handle_client(int c)
 {
@@ -315,6 +438,7 @@ void handle_client(int c)
     }
     else if (strcmp(command, "paste") == 0)
     {
+        paste(c);
     }
     else
     {

@@ -18,8 +18,9 @@
 char BASE_PATH[MAX_PATH_LEN] = "Group_folders/";
 char *root_path = "Group_folders/";
 char copied_path[MAX_PATH_LEN + MAX_FILENAME];
+char copied_type[10];
 
-char *download_path = "/root/Project_demo/download_folder";
+char *download_path = "download_folder";
 
 struct sockaddr_in server_addr;  // client_addr and c are not used in client.c
 GtkListStore *file_list_store;
@@ -59,6 +60,84 @@ GtkWidget *create_member_row(const gchar *email)
     return row;
 }
 
+char *show_rename_dialog(char *old_filename)
+{
+    GtkWidget *dialog, *content_area, *entry, *label;
+    char *new_filename = NULL;
+
+    dialog = gtk_dialog_new_with_buttons(
+        "Duplicate File", NULL, GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "_Rename",
+        GTK_RESPONSE_ACCEPT, "_Cancel", GTK_RESPONSE_REJECT, NULL);
+
+    content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    gtk_container_set_border_width(GTK_CONTAINER(content_area), 10);
+    gtk_box_set_spacing(GTK_BOX(content_area), 5);
+
+    char buffer[512];
+    snprintf(buffer, sizeof(buffer),
+             "File '%s' already exists. Please enter a new name:", old_filename);
+    label = gtk_label_new(buffer);
+    gtk_container_add(GTK_CONTAINER(content_area), label);
+
+    entry = gtk_entry_new();
+    gtk_entry_set_text(GTK_ENTRY(entry), old_filename);
+    gtk_container_add(GTK_CONTAINER(content_area), entry);
+
+    gtk_widget_show_all(dialog);
+
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT)
+    {
+        const gchar *text = gtk_entry_get_text(GTK_ENTRY(entry));
+        if (text && *text)
+        {
+            new_filename = g_strdup(text);
+        }
+    }
+    gtk_widget_destroy(dialog);
+    return new_filename;
+}
+
+char *check_name_duplicate(int s, char *current_path)
+{
+    int bytes_recv;
+    char duplicate_signal[20];
+
+    bytes_recv = recv(s, duplicate_signal, 20, 0);
+    if (bytes_recv < 0)
+    {
+        perror("recv");
+        exit(1);
+    }
+    char *new_filename;
+    char temp[MAX_FILENAME + MAX_PATH_LEN];
+    strcpy(temp, current_path);
+    while (strcmp(duplicate_signal, "duplicate") == 0)
+    {
+        new_filename = show_rename_dialog(basename(current_path));
+        if (new_filename == NULL)
+        {
+            return NULL;
+        }
+        strcpy(temp, BASE_PATH);
+        strcat(temp, new_filename);
+        // strcpy(current_path, temp);
+        g_free(new_filename);
+        if (send(s, temp, MAX_FILENAME + MAX_PATH_LEN, 0) < 0)
+        {
+            perror("send");
+            exit(1);
+        }
+        bytes_recv = recv(s, duplicate_signal, 20, 0);
+        if (bytes_recv < 0)
+        {
+            perror("recv");
+            exit(1);
+        }
+    }
+    strcpy(current_path, temp);
+    return current_path;
+}
+
 void insert_list_tree(char *filename, char *type,
                       GtkListStore *file_list_store)  // Removed iter parameter
 {
@@ -87,8 +166,6 @@ void get_list_of_files(GtkListStore *file_list_store)  // Removed iter parameter
         perror("send command");
         exit(1);
     }
-
-
 
     if (send(s, BASE_PATH, MAX_PATH_LEN, 0) < 0)
     {
@@ -193,9 +270,6 @@ void on_upload_file_clicked(GtkButton *button, gpointer user_data)
         // ----- KẾT THÚC PHẦN CHỈNH SỬA -----
 
         // Thêm file vào GtkListStore
-        GtkTreeIter iter;
-        gtk_list_store_append(file_list_store, &iter);
-        gtk_list_store_set(file_list_store, &iter, 0, basename, 1, "File", -1);
 
         // Giải phóng bộ nhớ sau khi sử dụng
         // g_free(basename);
@@ -230,6 +304,20 @@ void on_upload_file_clicked(GtkButton *button, gpointer user_data)
         {
             perror("send");
             exit(1);
+        }
+        char *new_path = check_name_duplicate(s, full_path);
+        if (new_path)
+        {
+            GtkTreeIter iter;
+            gtk_list_store_append(file_list_store, &iter);
+            gtk_list_store_set(file_list_store, &iter, 0, basename(new_path), 1, "file", -1);
+        }
+        else
+        {
+            close(s);
+            g_free(my_basename);
+            g_free(filepath);
+            return;
         }
         FILE *fp = fopen(filepath, "rb");
         if (fp == NULL)
@@ -304,12 +392,8 @@ void on_add_folder_clicked(GtkButton *button, gpointer user_data)
         {
             foldername = g_strdup(text);  // Make a copy
             g_print("Folder to create: %s\n", foldername);
-
-            // Thêm vào giao diện trước để có cảm giác phản hồi nhanh
-            GtkTreeIter iter;
-            gtk_list_store_append(file_list_store, &iter);
-            gtk_list_store_set(file_list_store, &iter, 0, foldername, 1, "Folder", -1);
             signal = 1;
+            // Thêm vào giao diện trước để có cảm giác phản hồi nhanh
         }
     }
     char *my_folder_name = foldername;
@@ -343,6 +427,14 @@ void on_add_folder_clicked(GtkButton *button, gpointer user_data)
             perror("send");
             exit(1);
         }
+        char *new_folder_path = check_name_duplicate(s, folder_path);
+        if (new_folder_path)
+        {
+            GtkTreeIter iter;
+            gtk_list_store_append(file_list_store, &iter);
+            gtk_list_store_set(file_list_store, &iter, 0, basename(new_folder_path), 1, "folder",
+                               -1);
+        }
         close(s);
         signal = 0;
     }
@@ -362,6 +454,10 @@ void on_folder_back_button_clicked(GtkButton *button, gpointer user_data)
         return;
     }
     dirname(BASE_PATH);
+    if (strcmp(BASE_PATH, "/") == 0)
+    {
+        return;
+    }
     strcat(BASE_PATH, "/");
     get_list_of_files(file_list_store);
 }
@@ -371,17 +467,17 @@ void on_folder_back_button_clicked(GtkButton *button, gpointer user_data)
 // Callback function when "Copy" is selected from the context menu
 void on_menu_copy_activate(GtkMenuItem *menuitem, gpointer user_data)
 {
-    int signal = 0;
     GtkTreePath *path = (GtkTreePath *)user_data;
     GtkWidget *menu = gtk_widget_get_parent(GTK_WIDGET(menuitem));
     GtkTreeModel *model = (GtkTreeModel *)g_object_get_data(G_OBJECT(menu), "target-model");
     GtkTreeIter iter;
     gchar *filename = NULL;
+    gchar *type = NULL;
 
     if (model && path && gtk_tree_model_get_iter(model, &iter, path))
     {
         // Get the filename from the first column (index 0)
-        gtk_tree_model_get(model, &iter, 0, &filename, -1);
+        gtk_tree_model_get(model, &iter, 0, &filename, 1, &type, -1);
 
         if (filename)
         {
@@ -390,8 +486,19 @@ void on_menu_copy_activate(GtkMenuItem *menuitem, gpointer user_data)
             // Set the clipboard text
             gtk_clipboard_set_text(clipboard, filename, -1);
             g_print("Copied '%s' to clipboard.\n", filename);
+            strcpy(copied_path, BASE_PATH);
+            strcat(copied_path, filename);
+            if (type)
+            {
+                strcpy(copied_type, type);
+                g_free(type);
+            }
+            else
+            {
+                strcpy(copied_type, "File");
+            }
+            g_free(filename);
         }
-        signal = 1;
     }
 
     gtk_tree_path_free(path);
@@ -434,6 +541,7 @@ void on_menu_download_activate(GtkMenuItem *menuitem, gpointer user_data)
     strcpy(filepath, download_path);
     strcat(filepath, "/");
     strcat(filepath, filename);
+    printf("%s\n", filepath);
     FILE *fp = fopen(filepath, "wb");
     if (fp == NULL)
     {
@@ -642,6 +750,66 @@ void on_menu_delete_activate(GtkMenuItem *menuitem, gpointer user_data)
     gtk_tree_path_free(path);  // Free the path
 }
 
+// Callback function when "Paste" is selected from the context menu
+void on_menu_paste_activate(GtkMenuItem *menuitem, gpointer user_data)
+{
+    // Logic for pasting a file/folder will be added here.
+    // For now, it just prints a message.
+    g_print("Paste action triggered.\n");
+    char filename[MAX_FILENAME];
+    strcpy(filename, basename(copied_path));
+    // strcat(copied_path, "/");
+    // strcat(copied_path, filename);
+    char current_path[MAX_PATH_LEN + MAX_FILENAME];
+    strcpy(current_path, BASE_PATH);
+    strcat(current_path, filename);
+
+    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == -1)
+    {
+        perror("socket");
+        exit(1);
+    }
+    if (connect(s, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        perror("connect");
+        exit(1);
+    }
+    if (send(s, "paste", COMMAND_LENGTH, 0) < 0)
+    {
+        perror("send");
+        exit(1);
+    }
+    // Send current path
+    if (send(s, current_path, MAX_PATH_LEN + MAX_FILENAME, 0) < 0)
+    {
+        perror("send");
+        exit(1);
+    }
+    // Send copied path
+    if (send(s, copied_path, MAX_PATH_LEN + MAX_FILENAME, 0) < 0)
+    {
+        perror("send");
+        exit(1);
+    }
+    char *new_path = check_name_duplicate(s, current_path);
+    if (!new_path)
+    {
+        close(s);
+        return;
+    }
+    close(s);
+
+    // gchar *final_basename = g_path_get_basename(current_path);
+    GtkTreeIter iter;
+    gtk_list_store_append(file_list_store, &iter);
+    gtk_list_store_set(file_list_store, &iter, 0, basename(new_path), 1, copied_type, -1);
+
+    // Example: You might get data from the clipboard like this:
+    // GtkClipboard *clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+    // gtk_clipboard_request_text(clipboard, on_paste_text_received, user_data);
+}
+
 // Callback for button press events on the TreeView
 gboolean on_files_treeview_button_press(GtkWidget *treeview, GdkEventButton *event,
                                         gpointer user_data)
@@ -650,11 +818,12 @@ gboolean on_files_treeview_button_press(GtkWidget *treeview, GdkEventButton *eve
     if (event->type == GDK_BUTTON_PRESS && event->button == 3)
     {
         GtkTreePath *path;
-        // Get the path at the click coordinates. If a row is not clicked, do nothing.
-        if (gtk_tree_view_get_path_at_pos(GTK_TREE_VIEW(treeview), (gint)event->x, (gint)event->y,
-                                          &path, NULL, NULL, NULL))
+        gboolean on_item = gtk_tree_view_get_path_at_pos(GTK_TREE_VIEW(treeview), (gint)event->x,
+                                                         (gint)event->y, &path, NULL, NULL, NULL);
+
+        if (on_item)
         {
-            // Create the context menu
+            // --- START: Click was on an item, show the existing menu ---
             GtkWidget *menu = gtk_menu_new();
 
             GtkWidget *item_view = gtk_menu_item_new_with_label("View");
@@ -711,6 +880,30 @@ gboolean on_files_treeview_button_press(GtkWidget *treeview, GdkEventButton *eve
             gtk_tree_path_free(path);
 
             return TRUE;  // Event handled, stop propagation
+            // --- END: Click was on an item ---
+        }
+        else
+        {
+            // --- START: Click was on an empty area, show "Paste" menu ---
+            GtkWidget *menu = gtk_menu_new();
+            GtkWidget *item_paste = gtk_menu_item_new_with_label("Paste");
+
+            // You might want to check if the clipboard is empty
+            // and disable "Paste" if it is. For now, it's always enabled.
+            // GtkClipboard *clipboard = gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+            // if (!gtk_clipboard_wait_is_text_available(clipboard)) {
+            //     gtk_widget_set_sensitive(item_paste, FALSE);
+            // }
+
+            g_signal_connect(item_paste, "activate", G_CALLBACK(on_menu_paste_activate), user_data);
+
+            gtk_menu_shell_append(GTK_MENU_SHELL(menu), item_paste);
+
+            gtk_widget_show_all(menu);
+            gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent *)event);
+
+            return TRUE;  // Event handled, stop propagation
+            // --- END: Click was on an empty area ---
         }
     }
     return FALSE;  // Event not handled, continue propagation
