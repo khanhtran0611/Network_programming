@@ -22,7 +22,7 @@ extern int is_member(int group_id, const char *email);
 
 #define MAX_FILENAME 256
 #define MAX_PATH_LEN 3072
-#define COMMAND_LENGTH 16
+#define COMMAND_LENGTH 20
 
 struct sockaddr_in server_addr, client_addr;
 int s, c;
@@ -582,12 +582,13 @@ void loginUser(int c)
     }
     email[bytes_recv] = '\0';
     // Trim trailing spaces/null bytes
-    int email_len = strlen(email);
-    for (int i = email_len - 1; i >= 0 && (email[i] == ' ' || email[i] == '\0' || email[i] == '\n');
-         i--)
-    {
-        email[i] = '\0';
-    }
+    // int email_len = strlen(email);
+    // for (int i = email_len - 1; i >= 0 && (email[i] == ' ' || email[i] == '\0' || email[i] ==
+    // '\n');
+    //      i--)
+    // {
+    //     email[i] = '\0';
+    // }
 
     bytes_recv = recv(c, password_buf, MAX_FILENAME, 0);
     if (bytes_recv <= 0)
@@ -658,12 +659,14 @@ void registerUser(int c)
         return;
     }
     email[bytes_recv] = '\0';
+    printf("%s\n", email);
     int email_len = strlen(email);
     for (int i = email_len - 1; i >= 0 && (email[i] == ' ' || email[i] == '\0' || email[i] == '\n');
          i--)
     {
         email[i] = '\0';
     }
+    printf("%s\n", email);
 
     bytes_recv = recv(c, password_buf, MAX_FILENAME, 0);
     if (bytes_recv <= 0)
@@ -672,6 +675,7 @@ void registerUser(int c)
         return;
     }
     password_buf[bytes_recv] = '\0';
+    printf("%s\n", password_buf);
     char password[32] = {0};
     int j = 0;
     for (int i = 0; i < bytes_recv && j < 31; i++)
@@ -686,6 +690,7 @@ void registerUser(int c)
         }
     }
     password[j] = '\0';
+    printf("%s\n", password);
 
     bytes_recv = recv(c, username_buf, MAX_FILENAME, 0);
     if (bytes_recv <= 0)
@@ -694,6 +699,7 @@ void registerUser(int c)
         return;
     }
     username_buf[bytes_recv] = '\0';
+    printf("%s\n", username_buf);
     char username[MAX_USERNAME_LEN] = {0};
     j = 0;
     for (int i = 0; i < bytes_recv && j < MAX_USERNAME_LEN - 1; i++)
@@ -708,10 +714,11 @@ void registerUser(int c)
         }
     }
     username[j] = '\0';
+    printf("%s\n", username);
 
     printf("Register attempt: email='%s', username='%s'\n", email, username);
 
-    if (register_user(email, password, username) == 0)
+    if (register_user(email, password, username_buf) == 0)
     {
         char response[256];
         snprintf(response, sizeof(response), "OK|%s|%s", email, username);

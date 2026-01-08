@@ -66,7 +66,6 @@ int init_database(void)
         "CREATE TABLE IF NOT EXISTS Session ("
         "token VARCHAR(64) PRIMARY KEY,"
         "email VARCHAR(30) NOT NULL,"
-        "username VARCHAR(100) NOT NULL,"
         "createAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,"
         "FOREIGN KEY(email) REFERENCES User(email));";
 
@@ -587,6 +586,8 @@ int create_user(const char *email, const char *password, const char *username)
 
 int verify_login(const char *email, const char *password, char *username, size_t username_size)
 {
+    printf("%s\n", email);
+    printf("%s\n", password);
     char *sql = "SELECT username FROM User WHERE email = ? AND password = ?;";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
@@ -1010,7 +1011,11 @@ int get_pending_invitation_id(const char *receiver_email, int group_id)
 int get_session_info(const char *token, char *email, size_t email_size, char *username,
                      size_t username_size, char *created_at, size_t created_at_size)
 {
-    char *sql = "SELECT email, username, strftime('%s', createAt) FROM Session WHERE token = ?;";
+    char *sql =
+        "SELECT s.email, u.username, strftime('%s', s.createAt) "
+        "FROM Session s "
+        "JOIN User u ON s.email = u.email "
+        "WHERE s.token = ?;";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
@@ -1052,7 +1057,10 @@ int get_session_info(const char *token, char *email, size_t email_size, char *us
 
 int create_session(const char *token, const char *email, const char *username)
 {
-    char *sql = "INSERT INTO Session (token, email, username) VALUES (?, ?, ?);";
+    // username parameter is kept for compatibility but not used
+    (void)username;
+
+    char *sql = "INSERT INTO Session (token, email) VALUES (?, ?);";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
     if (rc != SQLITE_OK)
@@ -1063,7 +1071,6 @@ int create_session(const char *token, const char *email, const char *username)
 
     sqlite3_bind_text(stmt, 1, token, -1, SQLITE_STATIC);
     sqlite3_bind_text(stmt, 2, email, -1, SQLITE_STATIC);
-    sqlite3_bind_text(stmt, 3, username, -1, SQLITE_STATIC);
 
     rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);

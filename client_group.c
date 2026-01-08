@@ -1174,9 +1174,51 @@ void show_login_dialog(void)
 
         if (email && *email && password && *password)
         {
-            char response[256];
-            if (send_command("LOGIN", email, password, response, sizeof(response)) == 0)
+            // Create socket and send data manually
+            int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            if (s == -1)
             {
+                GtkWidget *error_dialog = gtk_message_dialog_new(
+                    GTK_WINDOW(dialog), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+                    "Socket error! Cannot create connection.");
+                gtk_dialog_run(GTK_DIALOG(error_dialog));
+                gtk_widget_destroy(error_dialog);
+                gtk_widget_destroy(dialog);
+                show_login_dialog();
+                return;
+            }
+
+            if (connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+            {
+                close(s);
+                GtkWidget *error_dialog = gtk_message_dialog_new(
+                    GTK_WINDOW(dialog), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+                    "Connection error! Please check if server is running.");
+                gtk_dialog_run(GTK_DIALOG(error_dialog));
+                gtk_widget_destroy(error_dialog);
+                gtk_widget_destroy(dialog);
+                show_login_dialog();
+                return;
+            }
+
+            // Send LOGIN command
+            send(s, "LOGIN", COMMAND_LENGTH, 0);
+
+            // Send email
+            send(s, email, MAX_EMAIL_LEN, 0);
+
+            // Send password
+            send(s, password, MAX_FILENAME, 0);
+
+            // Receive response
+            char response[256];
+            ssize_t bytes_recv = recv(s, response, sizeof(response) - 1, 0);
+            close(s);
+
+            if (bytes_recv > 0)
+            {
+                response[bytes_recv] = '\0';
+
                 if (strncmp(response, "OK", 2) == 0)
                 {
                     // Parse response: OK|email|username|token
@@ -1226,13 +1268,13 @@ void show_login_dialog(void)
             }
             else
             {
-                GtkWidget *error_dialog = gtk_message_dialog_new(
-                    GTK_WINDOW(dialog), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
-                    "Connection error! Please check if server is running.");
+                GtkWidget *error_dialog =
+                    gtk_message_dialog_new(GTK_WINDOW(dialog), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                           GTK_BUTTONS_OK, "No response from server!");
                 gtk_dialog_run(GTK_DIALOG(error_dialog));
                 gtk_widget_destroy(error_dialog);
                 gtk_widget_destroy(dialog);
-                show_login_dialog();  // Show again
+                show_login_dialog();
                 return;
             }
         }
@@ -1329,7 +1371,7 @@ void show_register_dialog(void)
             if (s != -1 && connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) >= 0)
             {
                 send(s, "REGISTER", COMMAND_LENGTH, 0);
-                send(s, email, MAX_FILENAME, 0);
+                send(s, email, MAX_EMAIL_LEN, 0);
                 send(s, password, MAX_FILENAME, 0);
                 send(s, username, MAX_FILENAME, 0);
                 ssize_t bytes_recv = recv(s, response, sizeof(response) - 1, 0);
@@ -1582,10 +1624,31 @@ void on_create_group_clicked(GtkButton *button, gpointer user_data)
                 gtk_widget_destroy(dialog);
                 return;
             }
-            char response[32];
-            if (send_command("CREATE_GROUP", group_name, current_user_email, response,
-                             sizeof(response)) == 0)
+
+            int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            if (s == -1)
             {
+                perror("socket");
+                return;
+            }
+            if (connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+            {
+                perror("connect");
+                close(s);
+                return;
+            }
+
+            send(s, "CREATE_GROUP", COMMAND_LENGTH, 0);
+            send(s, group_name, MAX_FILENAME, 0);
+            send(s, current_user_email, MAX_EMAIL_LEN, 0);
+
+            char response[32];
+            ssize_t bytes_recv = recv(s, response, sizeof(response) - 1, 0);
+            close(s);
+
+            if (bytes_recv > 0)
+            {
+                response[bytes_recv] = '\0';
                 if (strncmp(response, "OK", 2) == 0)
                 {
                     // Refresh group list
@@ -1609,9 +1672,28 @@ void on_create_group_clicked(GtkButton *button, gpointer user_data)
 // Refresh group list
 void on_refresh_groups_clicked(GtkButton *button, gpointer user_data)
 {
-    char response[8192];
-    if (send_command("LIST_GROUP", NULL, NULL, response, sizeof(response)) == 0)
+    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == -1)
     {
+        perror("socket");
+        return;
+    }
+    if (connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+    {
+        perror("connect");
+        close(s);
+        return;
+    }
+
+    send(s, "LIST_GROUP", COMMAND_LENGTH, 0);
+
+    char response[8192];
+    ssize_t bytes_recv = recv(s, response, sizeof(response) - 1, 0);
+    close(s);
+
+    if (bytes_recv > 0)
+    {
+        response[bytes_recv] = '\0';
         gtk_list_store_clear(group_list_store);
 
         char *line = strtok(response, "\n");
@@ -1904,9 +1986,29 @@ void load_members(GtkListBox *members_listbox)
     char group_id_str[32];
     snprintf(group_id_str, sizeof(group_id_str), "%d", current_group_id);
 
-    char response[4096];
-    if (send_command("LIST_MEMBERS", group_id_str, NULL, response, sizeof(response)) == 0)
+    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == -1)
     {
+        perror("socket");
+        return;
+    }
+    if (connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+    {
+        perror("connect");
+        close(s);
+        return;
+    }
+
+    send(s, "LIST_MEMBERS", COMMAND_LENGTH, 0);
+    send(s, group_id_str, 32, 0);
+
+    char response[4096];
+    ssize_t bytes_recv = recv(s, response, sizeof(response) - 1, 0);
+    close(s);
+
+    if (bytes_recv > 0)
+    {
+        response[bytes_recv] = '\0';
         char *line = strtok(response, "\n");
         while (line != NULL)
         {
@@ -1946,9 +2048,29 @@ void load_requests(GtkListBox *requests_listbox)
     char group_id_str[32];
     snprintf(group_id_str, sizeof(group_id_str), "%d", current_group_id);
 
-    char response[4096];
-    if (send_command("LIST_REQUESTS", group_id_str, NULL, response, sizeof(response)) == 0)
+    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == -1)
     {
+        perror("socket");
+        return;
+    }
+    if (connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+    {
+        perror("connect");
+        close(s);
+        return;
+    }
+
+    send(s, "LIST_REQUESTS", COMMAND_LENGTH, 0);
+    send(s, group_id_str, 32, 0);
+
+    char response[4096];
+    ssize_t bytes_recv = recv(s, response, sizeof(response) - 1, 0);
+    close(s);
+
+    if (bytes_recv > 0)
+    {
+        response[bytes_recv] = '\0';
         char *line = strtok(response, "\n");
         while (line != NULL)
         {
@@ -2614,25 +2736,42 @@ gboolean on_groups_treeview_button_press(GtkWidget *treeview, GdkEventButton *ev
                 gtk_tree_model_get(model, &iter, 0, &group_name, -1);
 
                 // Get group ID
-                char response[8192];
                 int group_id = -1;
-                if (send_command("LIST_GROUP", NULL, NULL, response, sizeof(response)) == 0)
+                int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+                if (s != -1)
                 {
-                    char *line = strtok(response, "\n");
-                    while (line != NULL)
+                    if (connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) >= 0)
                     {
-                        int id;
-                        char name[MAX_GROUP_NAME_LEN];
-                        int member_count;
-                        if (sscanf(line, "%d|%49[^|]|%d", &id, name, &member_count) == 3)
+                        send(s, "LIST_GROUP", COMMAND_LENGTH, 0);
+
+                        char response[8192];
+                        ssize_t bytes_recv = recv(s, response, sizeof(response) - 1, 0);
+                        close(s);
+
+                        if (bytes_recv > 0)
                         {
-                            if (strcmp(name, group_name) == 0)
+                            response[bytes_recv] = '\0';
+                            char *line = strtok(response, "\n");
+                            while (line != NULL)
                             {
-                                group_id = id;
-                                break;
+                                int id;
+                                char name[MAX_GROUP_NAME_LEN];
+                                int member_count;
+                                if (sscanf(line, "%d|%49[^|]|%d", &id, name, &member_count) == 3)
+                                {
+                                    if (strcmp(name, group_name) == 0)
+                                    {
+                                        group_id = id;
+                                        break;
+                                    }
+                                }
+                                line = strtok(NULL, "\n");
                             }
                         }
-                        line = strtok(NULL, "\n");
+                    }
+                    else
+                    {
+                        close(s);
                     }
                 }
 

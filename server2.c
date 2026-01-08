@@ -15,7 +15,7 @@
 
 #define MAX_FILENAME 256
 #define MAX_PATH_LEN 3072
-#define COMMAND_LENGTH 16
+#define COMMAND_LENGTH 20
 
 struct sockaddr_in server_addr, client_addr;
 int s, c;
