@@ -52,11 +52,12 @@ void on_leave_group_clicked(GtkButton *button, gpointer user_data);
 void on_approve_request_clicked(GtkButton *button, gpointer user_data);
 void on_invite_clicked(GtkButton *button, gpointer user_data);
 void on_accept_invitation_clicked(GtkButton *button, gpointer user_data);
+void on_reject_invite_clicked(GtkButton *button, gpointer user_data);
 void load_members(GtkListBox *members_listbox);
 void load_requests(GtkListBox *requests_listbox);
 void load_non_members(GtkListBox *non_members_listbox);
 void load_invitations(GtkListBox *invitations_listbox);
-GtkWidget *create_non_member_row(const char *email);
+GtkWidget *create_non_member_row(const char *email, int invite_id);
 GtkWidget *create_invitation_row(int invite_id, const char *sender_email, const char *group_name);
 void show_login_dialog(void);
 void show_login_dialog_from_button(GtkButton *button, gpointer user_data);
@@ -1521,7 +1522,10 @@ void on_logout_clicked(GtkButton *button, gpointer user_data)
     }
     update_user_display();  // This will update label and button visibility
     show_login_dialog();
-    gtk_main_quit();
+    if (end_signal == 0)
+    {
+        gtk_main_quit();
+    }
 }
 
 // Callback for create group button
@@ -1943,8 +1947,8 @@ void load_requests(GtkListBox *requests_listbox)
     }
 }
 
-// Create a non-member row with email and invite button
-GtkWidget *create_non_member_row(const char *email)
+// Create a non-member row with email and invite/reject button
+GtkWidget *create_non_member_row(const char *email, int invite_id)
 {
     GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
     gtk_widget_set_margin_start(box, 5);
@@ -1956,13 +1960,25 @@ GtkWidget *create_non_member_row(const char *email)
     gtk_widget_set_halign(email_label, GTK_ALIGN_START);
     gtk_box_pack_start(GTK_BOX(box), email_label, TRUE, TRUE, 0);
 
-    GtkWidget *invite_button = gtk_button_new_with_label("Invite");
-    gtk_widget_set_size_request(invite_button, 80, 30);
+    GtkWidget *action_button;
+    if (invite_id > 0)
+    {
+        // Has pending invitation - show Reject button
+        action_button = gtk_button_new_with_label("Reject");
+        gtk_widget_set_size_request(action_button, 80, 30);
+        g_signal_connect(action_button, "clicked", G_CALLBACK(on_reject_invite_clicked),
+                         GINT_TO_POINTER(invite_id));
+    }
+    else
+    {
+        // No pending invitation - show Invite button
+        action_button = gtk_button_new_with_label("Invite");
+        gtk_widget_set_size_request(action_button, 80, 30);
+        char *email_copy = g_strdup(email);
+        g_signal_connect(action_button, "clicked", G_CALLBACK(on_invite_clicked), email_copy);
+    }
 
-    char *email_copy = g_strdup(email);
-    g_signal_connect(invite_button, "clicked", G_CALLBACK(on_invite_clicked), email_copy);
-
-    gtk_box_pack_end(GTK_BOX(box), invite_button, FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(box), action_button, FALSE, FALSE, 0);
 
     return box;
 }
@@ -2041,6 +2057,102 @@ void on_invite_clicked(GtkButton *button, gpointer user_data)
     g_free(receiver_email);
 }
 
+// Callback for reject invite button
+void on_reject_invite_clicked(GtkButton *button, gpointer user_data)
+{
+    int invite_id = GPOINTER_TO_INT(user_data);
+
+    if (current_group_id < 0 || invite_id < 0)
+    {
+        return;
+    }
+
+    // Confirm dialog
+    GtkWidget *toplevel = gtk_widget_get_toplevel(GTK_WIDGET(button));
+    GtkWidget *confirm_dialog = gtk_message_dialog_new(
+        GTK_WINDOW(toplevel), GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO,
+        "Are you sure you want to reject this invitation?");
+    gint res = gtk_dialog_run(GTK_DIALOG(confirm_dialog));
+    gtk_widget_destroy(confirm_dialog);
+
+    if (res != GTK_RESPONSE_YES)
+    {
+        return;
+    }
+
+    char invite_id_str[32];
+    snprintf(invite_id_str, sizeof(invite_id_str), "%d", invite_id);
+
+    // Create socket
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0)
+    {
+        perror("socket");
+        return;
+    }
+
+    if (connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+    {
+        perror("connect");
+        close(s);
+        return;
+    }
+
+    // Send REJECT_INVITE command
+    char command[COMMAND_LENGTH];
+    memset(command, 0, sizeof(command));
+    strncpy(command, "REJECT_INVITE", sizeof(command) - 1);
+    send(s, command, COMMAND_LENGTH, 0);
+
+    // Send invite_id
+    send(s, invite_id_str, 32, 0);
+
+    // Receive response
+    char response[32];
+    int bytes_recv = recv(s, response, 32, 0);
+    if (bytes_recv > 0)
+    {
+        response[bytes_recv] = '\0';
+
+        GtkWidget *dialog;
+        if (strcmp(response, "OK") == 0)
+        {
+            dialog =
+                gtk_message_dialog_new(GTK_WINDOW(toplevel), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+                                       GTK_BUTTONS_OK, "Invitation rejected successfully!");
+
+            // Reload non-members list
+            GtkWidget *notebook = gtk_widget_get_ancestor(GTK_WIDGET(button), GTK_TYPE_NOTEBOOK);
+            if (notebook)
+            {
+                GtkWidget *invite_tab = gtk_notebook_get_nth_page(GTK_NOTEBOOK(notebook), 2);
+                if (invite_tab)
+                {
+                    GtkWidget *scrolled = gtk_bin_get_child(GTK_BIN(invite_tab));
+                    if (scrolled)
+                    {
+                        GtkWidget *listbox = gtk_bin_get_child(GTK_BIN(scrolled));
+                        if (GTK_IS_LIST_BOX(listbox))
+                        {
+                            load_non_members(GTK_LIST_BOX(listbox));
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            dialog =
+                gtk_message_dialog_new(GTK_WINDOW(toplevel), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                       GTK_BUTTONS_OK, "Failed to reject invitation.");
+        }
+        gtk_dialog_run(GTK_DIALOG(dialog));
+        gtk_widget_destroy(dialog);
+    }
+
+    close(s);
+}
+
 // Load non-members for current group
 void load_non_members(GtkListBox *non_members_listbox)
 {
@@ -2100,8 +2212,48 @@ void load_non_members(GtkListBox *non_members_listbox)
             {
                 if (strlen(line) > 0)
                 {
-                    GtkWidget *row = create_non_member_row(line);
-                    gtk_container_add(GTK_CONTAINER(non_members_listbox), row);
+                    // Check if there's a pending invitation for this user
+                    int s2 = socket(AF_INET, SOCK_STREAM, 0);
+                    if (s2 >= 0)
+                    {
+                        if (connect(s2, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) >=
+                            0)
+                        {
+                            char cmd[COMMAND_LENGTH];
+                            memset(cmd, 0, sizeof(cmd));
+                            strncpy(cmd, "CHECK_INVITE", sizeof(cmd) - 1);
+                            send(s2, cmd, COMMAND_LENGTH, 0);
+                            send(s2, line, MAX_EMAIL_LEN, 0);
+                            send(s2, group_id_str, 32, 0);
+
+                            char invite_response[32];
+                            int invite_recv = recv(s2, invite_response, 32, 0);
+                            int invite_id = -1;
+                            if (invite_recv > 0)
+                            {
+                                invite_response[invite_recv] = '\0';
+                                if (strncmp(invite_response, "OK|", 3) == 0)
+                                {
+                                    invite_id = atoi(invite_response + 3);
+                                }
+                            }
+                            close(s2);
+
+                            GtkWidget *row = create_non_member_row(line, invite_id);
+                            gtk_container_add(GTK_CONTAINER(non_members_listbox), row);
+                        }
+                        else
+                        {
+                            close(s2);
+                            GtkWidget *row = create_non_member_row(line, -1);
+                            gtk_container_add(GTK_CONTAINER(non_members_listbox), row);
+                        }
+                    }
+                    else
+                    {
+                        GtkWidget *row = create_non_member_row(line, -1);
+                        gtk_container_add(GTK_CONTAINER(non_members_listbox), row);
+                    }
                 }
                 line = strtok(NULL, "\n");
             }
@@ -2581,15 +2733,42 @@ void on_leave_group_clicked(GtkButton *button, gpointer user_data)
         char group_id_str[32];
         snprintf(group_id_str, sizeof(group_id_str), "%d", current_group_id);
 
-        char response[32];
-        if (send_command("LEAVE_GROUP", current_user_email, group_id_str, response,
-                         sizeof(response)) == 0)
+        // Create socket and send data manually
+        int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        if (s == -1)
         {
+            return;
+        }
+        if (connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+        {
+            close(s);
+            return;
+        }
+        send(s, "LEAVE_GROUP", COMMAND_LENGTH, 0);
+        send(s, current_user_email, MAX_EMAIL_LEN, 0);
+        send(s, group_id_str, 32, 0);
+
+        char response[32];
+        ssize_t bytes_recv = recv(s, response, sizeof(response) - 1, 0);
+        close(s);
+
+        if (bytes_recv > 0)
+        {
+            response[bytes_recv] = '\0';
             if (strncmp(response, "OK", 2) == 0)
             {
                 current_group_id = -1;
                 gtk_widget_destroy(toplevel);
                 on_refresh_groups_clicked(NULL, NULL);
+            }
+            else
+            {
+                // Show error message
+                GtkWidget *error_dialog = gtk_message_dialog_new(
+                    GTK_WINDOW(toplevel), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+                    "Failed to leave group.");
+                gtk_dialog_run(GTK_DIALOG(error_dialog));
+                gtk_widget_destroy(error_dialog);
             }
         }
     }

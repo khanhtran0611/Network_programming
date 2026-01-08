@@ -49,6 +49,7 @@ int create_invitation(const char *sender_email, const char *receiver_email, int 
 int list_invitations(const char *receiver_email, char *buffer, size_t buffer_size);
 int accept_invitation(int invite_id);
 int reject_invitation(int invite_id);
+int get_pending_invitation_id(const char *receiver_email, int group_id);
 
 // Session operations
 int create_session(const char *token, const char *email, const char *username);

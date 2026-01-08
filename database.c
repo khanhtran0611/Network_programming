@@ -854,6 +854,32 @@ int reject_invitation(int invite_id)
     return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
+int get_pending_invitation_id(const char *receiver_email, int group_id)
+{
+    char *sql =
+        "SELECT invite_id FROM Invitation "
+        "WHERE receiver_email = ? AND group_id = ? AND status = 'pending';";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+    {
+        return -1;
+    }
+
+    sqlite3_bind_text(stmt, 1, receiver_email, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, 2, group_id);
+    rc = sqlite3_step(stmt);
+
+    int invite_id = -1;
+    if (rc == SQLITE_ROW)
+    {
+        invite_id = sqlite3_column_int(stmt, 0);
+    }
+
+    sqlite3_finalize(stmt);
+    return invite_id;
+}
+
 int get_session_info(const char *token, char *email, size_t email_size, char *username,
                      size_t username_size, char *created_at, size_t created_at_size)
 {

@@ -537,13 +537,15 @@ void leaveGroup(int c)
     }
     email[bytes_recv] = '\0';
 
-    bytes_recv = recv(c, group_id_str, sizeof(group_id_str), 0);
+    bytes_recv = recv(c, group_id_str, 32, 0);
     if (bytes_recv <= 0)
     {
         perror("recv group_id");
         return;
     }
     group_id_str[bytes_recv] = '\0';
+    printf("%s\n", group_id_str);
+    printf("%s\n", email);
     int group_id = atoi(group_id_str);
 
     // Check if user is leader
@@ -920,6 +922,69 @@ void acceptInvite(int c)
     }
 }
 
+void checkPendingInvite(int c)
+{
+    char receiver_email[MAX_EMAIL_LEN];
+    char group_id_str[32];
+    int bytes_recv;
+
+    bytes_recv = recv(c, receiver_email, MAX_EMAIL_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv receiver_email");
+        return;
+    }
+    receiver_email[bytes_recv] = '\0';
+
+    bytes_recv = recv(c, group_id_str, 32, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv group_id");
+        return;
+    }
+    group_id_str[bytes_recv] = '\0';
+    int group_id = atoi(group_id_str);
+
+    int invite_id = get_pending_invitation_id(receiver_email, group_id);
+    if (invite_id > 0)
+    {
+        char response[32];
+        snprintf(response, sizeof(response), "OK|%d", invite_id);
+        send(c, response, strlen(response), 0);
+        printf("Found pending invitation %d for %s in group %d\n", invite_id, receiver_email,
+               group_id);
+    }
+    else
+    {
+        send(c, "NONE", 5, 0);
+        printf("No pending invitation for %s in group %d\n", receiver_email, group_id);
+    }
+}
+
+void rejectInvite(int c)
+{
+    char invite_id_str[32];
+    int bytes_recv = recv(c, invite_id_str, 32, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv invite_id");
+        return;
+    }
+    invite_id_str[bytes_recv] = '\0';
+    int invite_id = atoi(invite_id_str);
+
+    if (reject_invitation(invite_id) == 0)
+    {
+        send(c, "OK", 3, 0);
+        printf("Invitation %d rejected\n", invite_id);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+        printf("Failed to reject invitation %d\n", invite_id);
+    }
+}
+
 void verifyToken(int c)
 {
     char token[65];
@@ -1072,6 +1137,14 @@ void handle_client(int c)
     else if (strcmp(command, "ACCEPT_INVITE") == 0)
     {
         acceptInvite(c);
+    }
+    else if (strcmp(command, "CHECK_INVITE") == 0)
+    {
+        checkPendingInvite(c);
+    }
+    else if (strcmp(command, "REJECT_INVITE") == 0)
+    {
+        rejectInvite(c);
     }
     else if (strcmp(command, "VERIFY_TOKEN") == 0)
     {
