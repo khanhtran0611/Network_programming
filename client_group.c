@@ -55,6 +55,7 @@ void on_leave_group_clicked(GtkButton *button, gpointer user_data);
 void on_approve_request_clicked(GtkButton *button, gpointer user_data);
 void on_invite_clicked(GtkButton *button, gpointer user_data);
 void on_accept_invitation_clicked(GtkButton *button, gpointer user_data);
+void on_reject_received_invitation_clicked(GtkButton *button, gpointer user_data);
 void on_reject_invite_clicked(GtkButton *button, gpointer user_data);
 void load_members(GtkListBox *members_listbox);
 void load_requests(GtkListBox *requests_listbox);
@@ -1922,10 +1923,122 @@ void on_groups_treeview_row_activated(GtkTreeView *treeview, GtkTreePath *path,
     }
 }
 
+// Callback for remove member button
+void on_remove_member_clicked(GtkButton *button, gpointer user_data)
+{
+    gchar *member_email = (gchar *)g_object_get_data(G_OBJECT(button), "member_email");
+    int group_id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "group_id"));
+
+    if (!member_email)
+    {
+        g_print("Error: member_email is NULL\n");
+        return;
+    }
+
+    // Confirm dialog
+    GtkWidget *dialog =
+        gtk_message_dialog_new(GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(button))),
+                               GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO,
+                               "Are you sure you want to remove %s from this group?", member_email);
+
+    gint result = gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+
+    if (result != GTK_RESPONSE_YES)
+    {
+        return;
+    }
+
+    // Send REMOVE_MEMBER command to server
+    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == -1)
+    {
+        perror("socket");
+        return;
+    }
+
+    if (connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+    {
+        perror("connect");
+        close(s);
+        return;
+    }
+
+    // Send command
+    send(s, "REMOVE_MEMBER", COMMAND_LENGTH, 0);
+
+    // Send leader email
+    send(s, current_user_email, MAX_EMAIL_LEN, 0);
+
+    // Send member email
+    send(s, member_email, MAX_EMAIL_LEN, 0);
+
+    // Send group_id
+    char group_id_str[32];
+    snprintf(group_id_str, sizeof(group_id_str), "%d", group_id);
+    send(s, group_id_str, 32, 0);
+
+    // Receive response
+    char response[32];
+    ssize_t bytes_recv = recv(s, response, sizeof(response) - 1, 0);
+    close(s);
+
+    if (bytes_recv > 0)
+    {
+        response[bytes_recv] = '\0';
+
+        if (strncmp(response, "OK", 2) == 0)
+        {
+            // Success - show message
+            GtkWidget *success_dialog = gtk_message_dialog_new(
+                GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(button))), GTK_DIALOG_MODAL,
+                GTK_MESSAGE_INFO, GTK_BUTTONS_OK, "Member removed successfully");
+            gtk_dialog_run(GTK_DIALOG(success_dialog));
+            gtk_widget_destroy(success_dialog);
+
+            // Reload members list
+            if (current_members_listbox)
+            {
+                load_members(current_members_listbox);
+            }
+
+            // Reload non-members list
+            if (current_non_members_listbox)
+            {
+                load_non_members(current_non_members_listbox);
+            }
+        }
+        else if (strstr(response, "NOT_LEADER"))
+        {
+            GtkWidget *error_dialog = gtk_message_dialog_new(
+                GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(button))), GTK_DIALOG_MODAL,
+                GTK_MESSAGE_ERROR, GTK_BUTTONS_OK, "Only the group leader can remove members");
+            gtk_dialog_run(GTK_DIALOG(error_dialog));
+            gtk_widget_destroy(error_dialog);
+        }
+        else if (strstr(response, "IS_LEADER"))
+        {
+            GtkWidget *error_dialog = gtk_message_dialog_new(
+                GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(button))), GTK_DIALOG_MODAL,
+                GTK_MESSAGE_ERROR, GTK_BUTTONS_OK, "Cannot remove the group leader");
+            gtk_dialog_run(GTK_DIALOG(error_dialog));
+            gtk_widget_destroy(error_dialog);
+        }
+        else
+        {
+            GtkWidget *error_dialog = gtk_message_dialog_new(
+                GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(button))), GTK_DIALOG_MODAL,
+                GTK_MESSAGE_ERROR, GTK_BUTTONS_OK, "Failed to remove member");
+            gtk_dialog_run(GTK_DIALOG(error_dialog));
+            gtk_widget_destroy(error_dialog);
+        }
+    }
+}
+
 // Helper function to create member row
 GtkWidget *create_member_row(const gchar *email)
 {
-    GtkWidget *row, *box, *label;
+    GtkWidget *row, *box, *label, *remove_button;
 
     row = gtk_list_box_row_new();
     box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
@@ -1937,6 +2050,23 @@ GtkWidget *create_member_row(const gchar *email)
     label = gtk_label_new(email);
     gtk_widget_set_halign(label, GTK_ALIGN_START);
     gtk_box_pack_start(GTK_BOX(box), label, TRUE, TRUE, 0);
+
+    // Only show remove button if current user is leader and this is not the current user
+    if (is_current_user_leader(current_group_id) && strcmp(email, current_user_email) != 0)
+    {
+        remove_button = gtk_button_new_with_label("Remove");
+        gtk_widget_set_halign(remove_button, GTK_ALIGN_END);
+
+        // Store member email and group_id in button data
+        g_object_set_data_full(G_OBJECT(remove_button), "member_email", g_strdup(email),
+                               (GDestroyNotify)g_free);
+        g_object_set_data(G_OBJECT(remove_button), "group_id", GINT_TO_POINTER(current_group_id));
+
+        g_signal_connect(remove_button, "clicked", G_CALLBACK(on_remove_member_clicked), NULL);
+
+        gtk_box_pack_end(GTK_BOX(box), remove_button, FALSE, FALSE, 0);
+    }
+
     gtk_container_add(GTK_CONTAINER(row), box);
 
     return row;
@@ -2416,6 +2546,14 @@ GtkWidget *create_invitation_row(int invite_id, const char *sender_email, const 
     gtk_widget_set_halign(info_label, GTK_ALIGN_START);
     gtk_box_pack_start(GTK_BOX(box), info_label, TRUE, TRUE, 0);
 
+    // Reject button
+    GtkWidget *reject_button = gtk_button_new_with_label("Reject");
+    gtk_widget_set_size_request(reject_button, 80, 30);
+    g_signal_connect(reject_button, "clicked", G_CALLBACK(on_reject_received_invitation_clicked),
+                     GINT_TO_POINTER(invite_id));
+    gtk_box_pack_end(GTK_BOX(box), reject_button, FALSE, FALSE, 0);
+
+    // Accept button
     GtkWidget *accept_button = gtk_button_new_with_label("Accept");
     gtk_widget_set_size_request(accept_button, 80, 30);
 
@@ -2425,6 +2563,84 @@ GtkWidget *create_invitation_row(int invite_id, const char *sender_email, const 
     gtk_box_pack_end(GTK_BOX(box), accept_button, FALSE, FALSE, 0);
 
     return box;
+}
+
+// Callback for reject received invitation button
+void on_reject_received_invitation_clicked(GtkButton *button, gpointer user_data)
+{
+    int invite_id = GPOINTER_TO_INT(user_data);
+
+    // Confirm dialog
+    GtkWidget *confirm_dialog =
+        gtk_message_dialog_new(GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(button))),
+                               GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION, GTK_BUTTONS_YES_NO,
+                               "Are you sure you want to reject this invitation?");
+
+    gint result = gtk_dialog_run(GTK_DIALOG(confirm_dialog));
+    gtk_widget_destroy(confirm_dialog);
+
+    if (result != GTK_RESPONSE_YES)
+    {
+        return;
+    }
+
+    char invite_id_str[32];
+    snprintf(invite_id_str, sizeof(invite_id_str), "%d", invite_id);
+
+    // Create socket
+    int s = socket(AF_INET, SOCK_STREAM, 0);
+    if (s < 0)
+    {
+        perror("socket");
+        return;
+    }
+
+    if (connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+    {
+        perror("connect");
+        close(s);
+        return;
+    }
+
+    // Send REJECT_INVITE command
+    char command[COMMAND_LENGTH];
+    memset(command, 0, sizeof(command));
+    strncpy(command, "REJECT_INVITE", sizeof(command) - 1);
+    send(s, command, COMMAND_LENGTH, 0);
+
+    // Send invite_id
+    send(s, invite_id_str, 32, 0);
+
+    // Receive response
+    char response[32];
+    int bytes_recv = recv(s, response, 32, 0);
+    close(s);
+
+    if (bytes_recv > 0)
+    {
+        response[bytes_recv] = '\0';
+
+        GtkWidget *dialog;
+        if (strcmp(response, "OK") == 0)
+        {
+            dialog = gtk_message_dialog_new(GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(button))),
+                                            GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK,
+                                            "Invitation rejected successfully.");
+
+            // Remove the invitation row from UI
+            GtkWidget *row = gtk_widget_get_parent(gtk_widget_get_parent(GTK_WIDGET(button)));
+            GtkListBox *list_box = GTK_LIST_BOX(gtk_widget_get_parent(row));
+            gtk_container_remove(GTK_CONTAINER(list_box), row);
+        }
+        else
+        {
+            dialog = gtk_message_dialog_new(GTK_WINDOW(gtk_widget_get_toplevel(GTK_WIDGET(button))),
+                                            GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+                                            "Failed to reject invitation.");
+        }
+        gtk_dialog_run(GTK_DIALOG(dialog));
+        gtk_widget_destroy(dialog);
+    }
 }
 
 // Callback for accept invitation button

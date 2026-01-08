@@ -5,6 +5,7 @@
 #include <libgen.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <pthread.h>
 #include <sodium.h>
 #include <stdint.h>  // For uint32_t
 #include <stdio.h>
@@ -12,6 +13,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "database.h"
@@ -26,9 +28,45 @@ extern int is_member(int group_id, const char *email);
 
 struct sockaddr_in server_addr, client_addr;
 int s, c;
-char BASE_PATH[MAX_PATH_LEN] = "Group_folders/";
-char *root_path = "Group_folders/";
-char copied_path[MAX_PATH_LEN + MAX_FILENAME];
+// char BASE_PATH[MAX_PATH_LEN] = "Group_folders/";
+// char *root_path = "Group_folders/";
+// char copied_path[MAX_PATH_LEN + MAX_FILENAME];
+
+void writeLog(const char *function_name, const char *user, const char *status, const char *details)
+{
+    FILE *log_file = fopen("server.log", "a");
+    if (log_file == NULL)
+    {
+        perror("Failed to open log file");
+        return;
+    }
+
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    if (tm_info == NULL)
+    {
+        perror("localtime failed");
+        fclose(log_file);
+        return;
+    }
+
+    char timestamp[64];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+
+    // Use fputs to avoid interpreting format specifiers in user strings
+    fputs("[", log_file);
+    fputs(timestamp, log_file);
+    fputs("] [", log_file);
+    fputs(function_name, log_file);
+    fputs("] [", log_file);
+    fputs(user, log_file);
+    fputs("] [", log_file);
+    fputs(status, log_file);
+    fputs("] ", log_file);
+    fputs(details, log_file);
+    fputs("\n", log_file);
+    fclose(log_file);
+}
 
 void generate_random_token(char *buffer, int length)
 {
@@ -42,293 +80,6 @@ void generate_random_token(char *buffer, int length)
     }
     buffer[length - 1] = '\0';
 }
-
-void addFile(int c)
-{
-    char filename[MAX_FILENAME];
-    char buffer[10240];
-    int bytes_recv = recv(c, filename, MAX_FILENAME, 0);
-    if (bytes_recv < 0)
-    {
-        perror("recv");
-        exit(1);
-    }
-    filename[bytes_recv] = '\0';
-    char full_path[MAX_PATH_LEN + MAX_FILENAME];
-    strcpy(full_path, BASE_PATH);
-    strcat(full_path, filename);
-    FILE *fp = fopen(full_path, "wb");
-    if (fp == NULL)
-    {
-        perror("fopen");
-        exit(1);
-    }
-    while ((bytes_recv = recv(c, buffer, 10240, 0)) > 0)
-    {
-        fwrite(buffer, 1, bytes_recv, fp);
-    }
-    fclose(fp);  // Di chuyển fclose() lên trước khi kiểm tra lỗi
-    if (bytes_recv < 0)
-    {
-        perror("recv");
-        exit(1);
-    }
-    printf("Sucessfully uploaded file : %s\n", filename);
-}
-
-void viewFolder(int c, char *full_path)
-{
-    DIR *d;
-    struct dirent *dir;
-    d = opendir(full_path);
-    if (d)
-    {
-        while ((dir = readdir(d)) != NULL)
-        {
-            if (strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0)
-            {
-                // Send filename
-                if (send(c, dir->d_name, MAX_FILENAME, 0) < 0)
-                {
-                    perror("send filename");
-                    exit(1);
-                }
-                printf("%s\n", dir->d_name);
-                char *type;
-                if (dir->d_type == DT_DIR)
-                {
-                    type = "folder";
-                }
-                else
-                {
-                    type = "file";
-                }
-                printf("%s\n", type);
-                // Send type
-                if (send(c, type, 10, 0) < 0)
-                {
-                    perror("send type");
-                    exit(1);
-                }
-            }
-        }
-        closedir(d);
-        // Signal end of list by sending a zero length for the next item
-        uint32_t zero_len = htonl(0);
-        if (send(c, &zero_len, MAX_FILENAME, 0) < 0)
-        {
-            perror("send zero_len");
-            exit(1);
-        }
-        if (shutdown(c, SHUT_WR) < 0)
-        {
-            perror("shutdown");
-        }
-    }
-    else
-    {
-        perror("opendir");
-        exit(1);
-    }
-}
-
-void get_list_of_files(int c)
-{
-    char foldername[MAX_FILENAME];
-    int bytes_recv = recv(c, foldername, MAX_FILENAME, 0);
-    if (bytes_recv < 0)
-    {
-        perror("recv");
-        exit(1);
-    }
-    foldername[bytes_recv] = '\0';
-    strncat(BASE_PATH, foldername, sizeof(BASE_PATH) - strlen(BASE_PATH) - 1);
-    strncat(BASE_PATH, "/", sizeof(BASE_PATH) - strlen(BASE_PATH) - 1);
-    viewFolder(c, BASE_PATH);
-}
-
-void back(int c)
-{
-    char *temp = dirname(BASE_PATH);
-    strcpy(BASE_PATH, temp);
-    strcat(BASE_PATH, "/");
-    printf("%s\n", BASE_PATH);
-    viewFolder(c, BASE_PATH);
-}
-
-void deleteFile(int c)
-{
-    char filename[MAX_FILENAME];
-    int bytes_recv = recv(c, filename, MAX_FILENAME, 0);
-    if (bytes_recv < 0)
-    {
-        perror("recv");
-        exit(1);
-    }
-    filename[bytes_recv] = '\0';
-    char full_path[MAX_FILENAME + MAX_PATH_LEN];
-    strcpy(full_path, BASE_PATH);
-    strcat(full_path, filename);
-    printf("%s\n", filename);
-    if (remove(full_path) != 0)
-    {
-        perror("remove");
-        exit(1);
-    }
-    printf("Sucessfully deleted file : %s\n", filename);
-}
-
-void addFolder(int c)
-{
-    char foldername[MAX_FILENAME];
-    int bytes_recv = recv(c, foldername, MAX_FILENAME, 0);
-    if (bytes_recv < 0)
-    {
-        perror("recv");
-        return;  // Don't exit the whole server
-    }
-    foldername[bytes_recv] = '\0';
-    char full_path[MAX_FILENAME + MAX_PATH_LEN];
-    strcpy(full_path, BASE_PATH);
-    strcat(full_path, foldername);
-    if (mkdir(full_path, 0755) == 0)
-    {  // Use 0755 for standard permissions
-        printf("Successfully created folder: %s\n", foldername);
-    }
-    else
-    {
-        perror("mkdir");
-    }
-}
-
-void deleteFolder(int c)
-{
-    char foldername[MAX_FILENAME];
-    int bytes_recv = recv(c, foldername, MAX_FILENAME, 0);
-    if (bytes_recv < 0)
-    {
-        perror("recv");
-        return;  // Don't exit the whole server
-    }
-    foldername[bytes_recv] = '\0';
-    char full_path[MAX_FILENAME + MAX_PATH_LEN];
-    strcpy(full_path, BASE_PATH);
-    strcat(full_path, foldername);
-    char command[MAX_FILENAME + MAX_PATH_LEN + 16];
-    strcpy(command, "rm -rf ");
-    strcat(command, full_path);
-    if (system(command) == 0)
-    {
-        printf("Successfully deleted folder: %s\n", foldername);
-    }
-    else
-    {
-        perror("system");
-    }
-}
-
-void renameFileOrFolder(int c)
-{
-    char old_name[MAX_FILENAME];
-    char new_name[MAX_FILENAME];
-    int bytes_recv;
-
-    // Receive old name
-    bytes_recv = recv(c, old_name, MAX_FILENAME, 0);
-    if (bytes_recv <= 0)
-    {
-        perror("recv old_name");
-        return;
-    }
-    old_name[bytes_recv] = '\0';
-    printf("Received old name: %s\n", old_name);
-
-    // Receive new name
-    bytes_recv = recv(c, new_name, MAX_FILENAME, 0);
-    if (bytes_recv <= 0)
-    {
-        perror("recv new_name");
-        return;
-    }
-    printf("Received new name: %s\n", new_name);
-    new_name[bytes_recv] = '\0';
-
-    char old_full_path[MAX_FILENAME + MAX_PATH_LEN];
-    char new_full_path[MAX_FILENAME + MAX_PATH_LEN];
-
-    snprintf(old_full_path, sizeof(old_full_path), "%s%s", BASE_PATH, old_name);
-    snprintf(new_full_path, sizeof(new_full_path), "%s%s", BASE_PATH, new_name);
-
-    if (rename(old_full_path, new_full_path) == 0)
-    {
-        printf("Successfully renamed '%s' to '%s'\n", old_name, new_name);
-    }
-    else
-    {
-        perror("rename");
-    }
-}
-
-void download(int c)
-{
-    printf("1\n");
-    char filename[MAX_FILENAME];
-    int bytes_recv = recv(c, filename, MAX_FILENAME, 0);
-    if (bytes_recv < 0)
-    {
-        perror("recv");
-        exit(1);
-    }
-    filename[bytes_recv] = '\0';
-    char full_path[MAX_FILENAME + MAX_PATH_LEN];
-    strcpy(full_path, BASE_PATH);
-    strcat(full_path, filename);
-    printf("%s\n", full_path);
-    FILE *fp = fopen(full_path, "rb");
-    if (fp == NULL)
-    {
-        perror("fopen");
-        exit(1);
-    }
-    char buffer[10240];
-    int bytes_read;
-    while ((bytes_read = fread(buffer, 1, sizeof(buffer), fp)) > 0)
-    {
-        printf("Read %d bytes \n", bytes_read);
-        if (send(c, buffer, bytes_read, 0) < 0)
-        {
-            perror("send");
-            exit(1);
-        }
-    }
-    if (shutdown(c, SHUT_WR) < 0)
-    {
-        perror("shutdown");
-    }
-    fclose(fp);
-}
-
-void out(int c)
-{
-    strcpy(BASE_PATH, root_path);
-}
-
-void copy(int c)
-{
-    char filename[MAX_FILENAME];
-    int bytes_recv = recv(c, filename, MAX_FILENAME, 0);
-    if (bytes_recv < 0)
-    {
-        perror("recv");
-        exit(1);
-    }
-    filename[bytes_recv] = '\0';
-    strcpy(copied_path, BASE_PATH);
-    strcat(copied_path, filename);
-    printf("%s\n", copied_path);
-}
-
-void paste(int c) {}
 
 void createGroup(int c)
 {
@@ -359,11 +110,18 @@ void createGroup(int c)
         snprintf(response, sizeof(response), "OK|%d", group_id);
         send(c, response, sizeof(response), 0);
         printf("Successfully created group: %s (ID: %d)\n", group_name, group_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Created group '%s' with ID %d", group_name,
+                 group_id);
+        writeLog("CREATE_GROUP", leader_email, "SUCCESS", log_details);
     }
     else
     {
         send(c, "ERROR", 6, 0);
         printf("Failed to create group: %s\n", group_name);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Failed to create group '%s'", group_name);
+        writeLog("CREATE_GROUP", leader_email, "ERROR", log_details);
     }
 }
 
@@ -483,6 +241,10 @@ void approveRequest(int c)
         send(c, "ERROR|NOT_LEADER", 16, 0);
         printf("User %s is not leader of group %d, cannot approve request %d\n", email, group_id,
                request_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details),
+                 "Not leader of group %d, cannot approve request %d", group_id, request_id);
+        writeLog("APPROVE_REQUEST", email, "ERROR", log_details);
         return;
     }
 
@@ -490,11 +252,18 @@ void approveRequest(int c)
     {
         send(c, "OK", 3, 0);
         printf("Request %d approved by %s\n", request_id, email);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Approved request %d for group %d", request_id,
+                 group_id);
+        writeLog("APPROVE_REQUEST", email, "SUCCESS", log_details);
     }
     else
     {
         send(c, "ERROR", 6, 0);
         printf("Failed to approve request %d\n", request_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Failed to approve request %d", request_id);
+        writeLog("APPROVE_REQUEST", email, "ERROR", log_details);
     }
 }
 
@@ -520,6 +289,86 @@ void listRequests(int c)
     else
     {
         send(c, "ERROR", 6, 0);
+    }
+}
+
+void removeMember(int c)
+{
+    char leader_email[MAX_EMAIL_LEN];
+    char member_email[MAX_EMAIL_LEN];
+    char group_id_str[32];
+    int bytes_recv;
+
+    bytes_recv = recv(c, leader_email, MAX_EMAIL_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv leader_email");
+        return;
+    }
+    leader_email[bytes_recv] = '\0';
+
+    bytes_recv = recv(c, member_email, MAX_EMAIL_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv member_email");
+        return;
+    }
+    member_email[bytes_recv] = '\0';
+
+    bytes_recv = recv(c, group_id_str, 32, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv group_id");
+        return;
+    }
+    group_id_str[bytes_recv] = '\0';
+    int group_id = atoi(group_id_str);
+
+    printf("Remove request: leader=%s, member=%s, group=%d\n", leader_email, member_email,
+           group_id);
+
+    // Verify user is leader
+    if (!is_leader(group_id, leader_email))
+    {
+        send(c, "ERROR|NOT_LEADER", 16, 0);
+        printf("User %s is not leader of group %d, cannot remove members\n", leader_email,
+               group_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details),
+                 "Not leader of group %d, cannot remove member %s", group_id, member_email);
+        writeLog("REMOVE_MEMBER", leader_email, "ERROR", log_details);
+        return;
+    }
+
+    // Cannot remove leader
+    if (is_leader(group_id, member_email))
+    {
+        send(c, "ERROR|IS_LEADER", 16, 0);
+        printf("Cannot remove leader %s from group %d\n", member_email, group_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Cannot remove leader %s from group %d",
+                 member_email, group_id);
+        writeLog("REMOVE_MEMBER", leader_email, "ERROR", log_details);
+        return;
+    }
+
+    if (remove_member(group_id, member_email) == 0)
+    {
+        send(c, "OK", 3, 0);
+        printf("Leader %s removed member %s from group %d\n", leader_email, member_email, group_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Removed member %s from group %d", member_email,
+                 group_id);
+        writeLog("REMOVE_MEMBER", leader_email, "SUCCESS", log_details);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+        printf("Failed to remove member %s from group %d\n", member_email, group_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Failed to remove member %s from group %d",
+                 member_email, group_id);
+        writeLog("REMOVE_MEMBER", leader_email, "ERROR", log_details);
     }
 }
 
@@ -553,6 +402,10 @@ void leaveGroup(int c)
     {
         send(c, "ERROR|LEADER", 13, 0);
         printf("Cannot remove leader from group %d\n", group_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Cannot leave group %d - user is leader",
+                 group_id);
+        writeLog("LEAVE_GROUP", email, "ERROR", log_details);
         return;
     }
 
@@ -560,11 +413,17 @@ void leaveGroup(int c)
     {
         send(c, "OK", 3, 0);
         printf("User %s left group %d\n", email, group_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Left group %d", group_id);
+        writeLog("LEAVE_GROUP", email, "SUCCESS", log_details);
     }
     else
     {
         send(c, "ERROR", 6, 0);
         printf("Failed to remove user %s from group %d\n", email, group_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Failed to leave group %d", group_id);
+        writeLog("LEAVE_GROUP", email, "ERROR", log_details);
     }
 }
 
@@ -631,17 +490,20 @@ void loginUser(int c)
             snprintf(response, sizeof(response), "OK|%s|%s|%s", email, username, token);
             send(c, response, strlen(response) + 1, 0);
             printf("User %s logged in successfully, token: %s\n", email, token);
+            writeLog("LOGIN", email, "SUCCESS", "User logged in successfully");
         }
         else
         {
             send(c, "ERROR", 6, 0);
             printf("Failed to create session for %s\n", email);
+            writeLog("LOGIN", email, "ERROR", "Failed to create session");
         }
     }
     else
     {
         send(c, "ERROR", 6, 0);
         printf("Login failed for %s (password: '%s')\n", email, password);
+        writeLog("LOGIN", email, "ERROR", "Invalid credentials");
     }
 }
 
@@ -724,11 +586,16 @@ void registerUser(int c)
         snprintf(response, sizeof(response), "OK|%s|%s", email, username);
         send(c, response, strlen(response) + 1, 0);
         printf("User %s registered successfully\n", email);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "New user registered with username '%s'",
+                 username);
+        writeLog("REGISTER", email, "SUCCESS", log_details);
     }
     else
     {
         send(c, "ERROR|EXISTS", 13, 0);
         printf("Registration failed for %s (user may already exist)\n", email);
+        writeLog("REGISTER", email, "ERROR", "Registration failed - user may already exist");
     }
 }
 
@@ -872,12 +739,20 @@ void inviteUser(int c)
         send(c, "OK", 3, 0);
         printf("Invitation created: %s invited %s to group %d\n", sender_email, receiver_email,
                group_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Invited %s to group %d", receiver_email,
+                 group_id);
+        writeLog("INVITE_USER", sender_email, "SUCCESS", log_details);
     }
     else
     {
         send(c, "ERROR", 6, 0);
         printf("Failed to create invitation: %s -> %s (group %d)\n", sender_email, receiver_email,
                group_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Failed to invite %s to group %d",
+                 receiver_email, group_id);
+        writeLog("INVITE_USER", sender_email, "ERROR", log_details);
     }
 }
 
@@ -921,11 +796,17 @@ void acceptInvite(int c)
     {
         send(c, "OK", 3, 0);
         printf("Invitation %d accepted\n", invite_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Accepted invitation %d", invite_id);
+        writeLog("ACCEPT_INVITE", "unknown", "SUCCESS", log_details);
     }
     else
     {
         send(c, "ERROR", 6, 0);
         printf("Failed to accept invitation %d\n", invite_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Failed to accept invitation %d", invite_id);
+        writeLog("ACCEPT_INVITE", "unknown", "ERROR", log_details);
     }
 }
 
@@ -984,11 +865,17 @@ void rejectInvite(int c)
     {
         send(c, "OK", 3, 0);
         printf("Invitation %d rejected\n", invite_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Rejected invitation %d", invite_id);
+        writeLog("REJECT_INVITE", "unknown", "SUCCESS", log_details);
     }
     else
     {
         send(c, "ERROR", 6, 0);
         printf("Failed to reject invitation %d\n", invite_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Failed to reject invitation %d", invite_id);
+        writeLog("REJECT_INVITE", "unknown", "ERROR", log_details);
     }
 }
 
@@ -1017,11 +904,15 @@ void updateUsername(int c)
     {
         send(c, "OK", 3, 0);
         printf("Username updated for %s to %s\n", email, new_username);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Updated username to '%s'", new_username);
+        writeLog("UPDATE_USERNAME", email, "SUCCESS", log_details);
     }
     else
     {
         send(c, "ERROR", 6, 0);
         printf("Failed to update username for %s\n", email);
+        writeLog("UPDATE_USERNAME", email, "ERROR", "Failed to update username");
     }
 }
 
@@ -1040,11 +931,13 @@ void deleteUser(int c)
     {
         send(c, "OK", 3, 0);
         printf("User %s deleted successfully\n", email);
+        writeLog("DELETE_USER", email, "SUCCESS", "User account deleted");
     }
     else
     {
         send(c, "ERROR", 6, 0);
         printf("Failed to delete user %s\n", email);
+        writeLog("DELETE_USER", email, "ERROR", "Failed to delete user account");
     }
 }
 
@@ -1099,49 +992,7 @@ void handle_client(int c)
         command[i] = '\0';
     }
     printf("Received command: %s\n", command);
-    if (strcmp(command, "addFile") == 0)
-    {
-        addFile(c);
-    }
-    else if (strcmp(command, "getList") == 0)
-    {
-        get_list_of_files(c);
-    }
-    else if (strcmp(command, "deleteFile") == 0)
-    {
-        deleteFile(c);
-    }
-    else if (strcmp(command, "addFolder") == 0)
-    {
-        addFolder(c);
-    }
-    else if (strcmp(command, "deleteFolder") == 0)
-    {
-        deleteFolder(c);
-    }
-    else if (strcmp(command, "rename") == 0)
-    {
-        renameFileOrFolder(c);
-    }
-    else if (strcmp(command, "back") == 0)
-    {
-        back(c);
-    }
-    else if (strcmp(command, "download") == 0)
-    {
-        download(c);
-    }
-    else if (strcmp(command, "out") == 0)
-    {
-        out(c);
-    }
-    else if (strcmp(command, "copy") == 0)
-    {
-    }
-    else if (strcmp(command, "paste") == 0)
-    {
-    }
-    else if (strcmp(command, "CREATE_GROUP") == 0)
+    if (strcmp(command, "CREATE_GROUP") == 0)
     {
         createGroup(c);
     }
@@ -1168,6 +1019,10 @@ void handle_client(int c)
     else if (strcmp(command, "LEAVE_GROUP") == 0)
     {
         leaveGroup(c);
+    }
+    else if (strcmp(command, "REMOVE_MEMBER") == 0)
+    {
+        removeMember(c);
     }
     else if (strcmp(command, "LOGIN") == 0)
     {
@@ -1227,6 +1082,18 @@ void handle_client(int c)
     }
 }
 
+// Thread function to handle client
+void *client_thread(void *arg)
+{
+    int client_sock = *(int *)arg;
+    free(arg);
+
+    handle_client(client_sock);
+    close(client_sock);
+
+    return NULL;
+}
+
 int main()
 {
     // Initialize database
@@ -1258,6 +1125,9 @@ int main()
         perror("listen");
         exit(1);
     }
+
+    printf("Server listening on port 8081...\n");
+
     while (1)
     {
         socklen_t clen = sizeof(struct sockaddr);
@@ -1265,9 +1135,29 @@ int main()
         if (c < 0)
         {
             perror("accept");
-            exit(1);
+            continue;
         }
-        handle_client(c);
-        close(c);
+
+        // Allocate memory for socket descriptor to pass to thread
+        int *client_sock = malloc(sizeof(int));
+        if (client_sock == NULL)
+        {
+            perror("malloc");
+            close(c);
+            continue;
+        }
+        *client_sock = c;
+
+        pthread_t thread_id;
+        if (pthread_create(&thread_id, NULL, client_thread, client_sock) != 0)
+        {
+            perror("pthread_create");
+            free(client_sock);
+            close(c);
+            continue;
+        }
+
+        // Detach thread so it cleans up automatically when done
+        pthread_detach(thread_id);
     }
 }

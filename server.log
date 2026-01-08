@@ -1,0 +1,24 @@
+[2026-01-08 16:32:14] [LOGIN] [alice@example.com ] [ERROR] Invalid credentials
+[2026-01-08 16:32:26] [LOGIN] [alice@example.com] [SUCCESS] User logged in successfully
+[2026-01-08 16:33:46] [APPROVE_REQUEST] [alice@example.com] [SUCCESS] Approved request 1 for group 1
+[2026-01-08 16:44:09] [LOGIN] [trangiakhanht@gmail.com] [SUCCESS] User logged in successfully
+[2026-01-08 16:44:13] [DELETE_USER] [trangiakhanht@gmail.com] [SUCCESS] User account deleted
+[2026-01-08 17:10:40] [LOGIN] [alice@example.com] [SUCCESS] User logged in successfully
+[2026-01-08 17:10:52] [REMOVE_MEMBER] [alice@example.com] [SUCCESS] Removed member bob@example.com from group 1
+[2026-01-08 17:12:36] [REMOVE_MEMBER] [alice@example.com] [SUCCESS] Removed member noah@example.com from group 1
+[2026-01-08 17:14:05] [LOGIN] [bob@example.com] [SUCCESS] User logged in successfully
+[2026-01-08 17:15:45] [REMOVE_MEMBER] [bob@example.com] [SUCCESS] Removed member liam@example.com from group 2
+[2026-01-08 17:22:21] [REJECT_INVITE] [unknown] [SUCCESS] Rejected invitation 9
+[2026-01-08 17:23:51] [REJECT_INVITE] [unknown] [SUCCESS] Rejected invitation 4
+[2026-01-08 17:24:07] [LOGIN] [diana@example.com] [SUCCESS] User logged in successfully
+[2026-01-08 17:24:18] [INVITE_USER] [diana@example.com] [SUCCESS] Invited alice@example.com to group 4
+[2026-01-08 17:24:29] [LOGIN] [alice@example.com] [SUCCESS] User logged in successfully
+[2026-01-08 17:24:34] [REJECT_INVITE] [unknown] [SUCCESS] Rejected invitation 14
+[2026-01-08 17:24:43] [LOGIN] [diana@example.com] [SUCCESS] User logged in successfully
+[2026-01-08 17:50:59] [CREATE_GROUP] [diana@example.com] [SUCCESS] Created group 'Testing' with ID 11
+[2026-01-08 17:51:14] [INVITE_USER] [diana@example.com] [SUCCESS] Invited bob@example.com to group 11
+[2026-01-08 17:53:14] [LOGIN] [bob@example.com] [SUCCESS] User logged in successfully
+[2026-01-08 17:52:11] [ACCEPT_INVITE] [unknown] [SUCCESS] Accepted invitation 15
+[2026-01-08 17:52:28] [LOGIN] [diana@example.com] [SUCCESS] User logged in successfully
+[2026-01-08 17:52:34] [APPROVE_REQUEST] [diana@example.com] [SUCCESS] Approved request 15 for group 11
+[2026-01-08 17:53:22] [UPDATE_USERNAME] [diana@example.com] [SUCCESS] Updated username to 'Diana Johnny'

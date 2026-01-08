@@ -5,12 +5,14 @@
 #include <libgen.h>
 #include <netinet/in.h>
 #include <netinet/ip.h>
+#include <pthread.h>
 #include <stdint.h>  // For uint32_t
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 
 #define MAX_FILENAME 256
@@ -21,7 +23,41 @@ struct sockaddr_in server_addr, client_addr;
 int s, c;
 char BASE_PATH[MAX_PATH_LEN] = "Group_folders/";
 char *root_path = "Group_folders/";
-char copied_path[MAX_PATH_LEN + MAX_FILENAME];
+// char copied_path[MAX_PATH_LEN + MAX_FILENAME];
+
+void writeLog(const char *function_name, const char *status, const char *details)
+{
+    FILE *log_file = fopen("server2.log", "a");
+    if (log_file == NULL)
+    {
+        perror("Failed to open log file");
+        return;
+    }
+
+    time_t now = time(NULL);
+    struct tm *tm_info = localtime(&now);
+    if (tm_info == NULL)
+    {
+        perror("localtime failed");
+        fclose(log_file);
+        return;
+    }
+
+    char timestamp[64];
+    strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S", tm_info);
+
+    // Use fputs to avoid interpreting format specifiers in strings
+    fputs("[", log_file);
+    fputs(timestamp, log_file);
+    fputs("] [", log_file);
+    fputs(function_name, log_file);
+    fputs("] [", log_file);
+    fputs(status, log_file);
+    fputs("] ", log_file);
+    fputs(details, log_file);
+    fputs("\n", log_file);
+    fclose(log_file);
+}
 
 void addFile(int c)
 {
@@ -83,6 +119,9 @@ void addFile(int c)
         exit(1);
     }
     printf("Sucessfully uploaded file : %s\n", full_path);
+    char log_details[512];
+    snprintf(log_details, sizeof(log_details), "File uploaded: %s", full_path);
+    writeLog("ADD_FILE", "SUCCESS", log_details);
 }
 
 void viewFolder(int c, char *full_path)
@@ -180,9 +219,15 @@ void deleteFile(int c)
     if (remove(full_path) != 0)
     {
         perror("remove");
+        char log_details[512];
+        snprintf(log_details, sizeof(log_details), "Failed to delete file: %s", full_path);
+        writeLog("DELETE_FILE", "ERROR", log_details);
         exit(1);
     }
     printf("Sucessfully deleted file : %s\n", full_path);
+    char log_details[512];
+    snprintf(log_details, sizeof(log_details), "File deleted: %s", full_path);
+    writeLog("DELETE_FILE", "SUCCESS", log_details);
 }
 
 void addFolder(int c)
@@ -228,10 +273,16 @@ void addFolder(int c)
     if (mkdir(full_path, 0755) == 0)
     {  // Use 0755 for standard permissions
         printf("Successfully created folder: %s\n", full_path);
+        char log_details[512];
+        snprintf(log_details, sizeof(log_details), "Folder created: %s", full_path);
+        writeLog("ADD_FOLDER", "SUCCESS", log_details);
     }
     else
     {
         perror("mkdir");
+        char log_details[512];
+        snprintf(log_details, sizeof(log_details), "Failed to create folder: %s", full_path);
+        writeLog("ADD_FOLDER", "ERROR", log_details);
     }
 }
 
@@ -250,10 +301,16 @@ void deleteFolder(int c)
     if (system(command) == 0)
     {
         printf("Successfully deleted folder: %s\n", full_path);
+        char log_details[512];
+        snprintf(log_details, sizeof(log_details), "Folder deleted: %s", full_path);
+        writeLog("DELETE_FOLDER", "SUCCESS", log_details);
     }
     else
     {
         perror("system");
+        char log_details[512];
+        snprintf(log_details, sizeof(log_details), "Failed to delete folder: %s", full_path);
+        writeLog("DELETE_FOLDER", "ERROR", log_details);
     }
 }
 
@@ -286,10 +343,18 @@ void renameFileOrFolder(int c)
     if (rename(old_full_path, new_full_path) == 0)
     {
         printf("Successfully renamed '%s' to '%s'\n", old_full_path, new_full_path);
+        char log_details[1024];
+        snprintf(log_details, sizeof(log_details), "Renamed '%s' to '%s'", old_full_path,
+                 new_full_path);
+        writeLog("RENAME", "SUCCESS", log_details);
     }
     else
     {
         perror("rename");
+        char log_details[1024];
+        snprintf(log_details, sizeof(log_details), "Failed to rename '%s' to '%s'", old_full_path,
+                 new_full_path);
+        writeLog("RENAME", "ERROR", log_details);
     }
 }
 
@@ -328,6 +393,9 @@ void download(int c)
     }
     fclose(fp);
     printf("Successfully downloaded file: %s\n", full_path);
+    char log_details[512];
+    snprintf(log_details, sizeof(log_details), "File downloaded: %s", full_path);
+    writeLog("DOWNLOAD", "SUCCESS", log_details);
 }
 
 void paste(int c)
@@ -383,10 +451,17 @@ void paste(int c)
     if (system(command) == 0)
     {
         printf("Successfully pasted to: %s\n", currentpath);
+        char log_details[1024];
+        snprintf(log_details, sizeof(log_details), "Pasted '%s' to '%s'", copied_path, currentpath);
+        writeLog("PASTE", "SUCCESS", log_details);
     }
     else
     {
         perror("system");
+        char log_details[1024];
+        snprintf(log_details, sizeof(log_details), "Failed to paste '%s' to '%s'", copied_path,
+                 currentpath);
+        writeLog("PASTE", "ERROR", log_details);
     }
 }
 
@@ -426,10 +501,6 @@ void handle_client(int c)
     {
         renameFileOrFolder(c);
     }
-    else if (strcmp(command, "back") == 0)
-    {
-        back(c);
-    }
     else if (strcmp(command, "download") == 0)
     {
         download(c);
@@ -442,6 +513,18 @@ void handle_client(int c)
     {
         printf("Unknown command: %s\n", command);
     }
+}
+
+// Thread function to handle client
+void *client_thread(void *arg)
+{
+    int client_sock = *(int *)arg;
+    free(arg);
+
+    handle_client(client_sock);
+    close(client_sock);
+
+    return NULL;
 }
 
 int main()
@@ -468,16 +551,37 @@ int main()
         perror("listen");
         exit(1);
     }
+
+    printf("Server2 listening on port 8080...\n");
+
     while (1)
     {
-        int clen = sizeof(struct sockaddr);
+        socklen_t clen = sizeof(struct sockaddr);
         c = accept(s, (struct sockaddr *)&client_addr, &clen);
         if (c < 0)
         {
             perror("accept");
-            exit(1);
+            continue;
         }
-        handle_client(c);
-        close(c);
+
+        int *client_sock = malloc(sizeof(int));
+        if (client_sock == NULL)
+        {
+            perror("malloc");
+            close(c);
+            continue;
+        }
+        *client_sock = c;
+
+        pthread_t thread_id;
+        if (pthread_create(&thread_id, NULL, client_thread, client_sock) != 0)
+        {
+            perror("pthread_create");
+            free(client_sock);
+            close(c);
+            continue;
+        }
+
+        pthread_detach(thread_id);
     }
 }

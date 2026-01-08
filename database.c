@@ -423,7 +423,7 @@ int approve_request(int request_id)
         return 0;
     }
 
-    printf("dbhere\n%s\n%d\ndbend\n", email, group_id);
+    // printf("dbhere\n%s\n%d\ndbend\n", email, group_id);
 
     // Add member
     if (add_member(group_id, email) != 0)
@@ -586,8 +586,8 @@ int create_user(const char *email, const char *password, const char *username)
 
 int verify_login(const char *email, const char *password, char *username, size_t username_size)
 {
-    printf("%s\n", email);
-    printf("%s\n", password);
+    // printf("%s\n", email);
+    // printf("%s\n", password);
     char *sql = "SELECT username FROM User WHERE email = ? AND password = ?;";
     sqlite3_stmt *stmt;
     int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
