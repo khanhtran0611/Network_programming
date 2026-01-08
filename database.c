@@ -697,6 +697,133 @@ int list_non_members(int group_id, char *buffer, size_t buffer_size)
     return 0;
 }
 
+int update_username(const char *email, const char *new_username)
+{
+    char *sql = "UPDATE User SET username = ? WHERE email = ?;";
+    sqlite3_stmt *stmt;
+    int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, 0);
+    if (rc != SQLITE_OK)
+    {
+        fprintf(stderr, "Failed to prepare update username statement: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+
+    sqlite3_bind_text(stmt, 1, new_username, -1, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, 2, email, -1, SQLITE_STATIC);
+
+    rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE)
+    {
+        fprintf(stderr, "Failed to update username: %s\n", sqlite3_errmsg(db));
+        return -1;
+    }
+
+    return 0;
+}
+
+int delete_user(const char *email)
+{
+    // Start a transaction
+    char *err_msg = 0;
+    int rc = sqlite3_exec(db, "BEGIN TRANSACTION;", 0, 0, &err_msg);
+    if (rc != SQLITE_OK)
+    {
+        fprintf(stderr, "Failed to begin transaction: %s\n", err_msg);
+        sqlite3_free(err_msg);
+        return -1;
+    }
+
+    // Delete from Session table
+    char *sql1 = "DELETE FROM Session WHERE email = ?;";
+    sqlite3_stmt *stmt1;
+    rc = sqlite3_prepare_v2(db, sql1, -1, &stmt1, 0);
+    if (rc == SQLITE_OK)
+    {
+        sqlite3_bind_text(stmt1, 1, email, -1, SQLITE_STATIC);
+        sqlite3_step(stmt1);
+        sqlite3_finalize(stmt1);
+    }
+
+    // Delete from Invitation table (both sender and receiver)
+    char *sql2 = "DELETE FROM Invitation WHERE sender_email = ? OR receiver_email = ?;";
+    sqlite3_stmt *stmt2;
+    rc = sqlite3_prepare_v2(db, sql2, -1, &stmt2, 0);
+    if (rc == SQLITE_OK)
+    {
+        sqlite3_bind_text(stmt2, 1, email, -1, SQLITE_STATIC);
+        sqlite3_bind_text(stmt2, 2, email, -1, SQLITE_STATIC);
+        sqlite3_step(stmt2);
+        sqlite3_finalize(stmt2);
+    }
+
+    // Delete from Request table
+    char *sql3 = "DELETE FROM Request WHERE Email = ?;";
+    sqlite3_stmt *stmt3;
+    rc = sqlite3_prepare_v2(db, sql3, -1, &stmt3, 0);
+    if (rc == SQLITE_OK)
+    {
+        sqlite3_bind_text(stmt3, 1, email, -1, SQLITE_STATIC);
+        sqlite3_step(stmt3);
+        sqlite3_finalize(stmt3);
+    }
+
+    // Delete from Member table
+    char *sql4 = "DELETE FROM Member WHERE Email = ?;";
+    sqlite3_stmt *stmt4;
+    rc = sqlite3_prepare_v2(db, sql4, -1, &stmt4, 0);
+    if (rc == SQLITE_OK)
+    {
+        sqlite3_bind_text(stmt4, 1, email, -1, SQLITE_STATIC);
+        sqlite3_step(stmt4);
+        sqlite3_finalize(stmt4);
+    }
+
+    // Delete groups where user is leader
+    char *sql5 = "DELETE FROM Group_table WHERE leader_email = ?;";
+    sqlite3_stmt *stmt5;
+    rc = sqlite3_prepare_v2(db, sql5, -1, &stmt5, 0);
+    if (rc == SQLITE_OK)
+    {
+        sqlite3_bind_text(stmt5, 1, email, -1, SQLITE_STATIC);
+        sqlite3_step(stmt5);
+        sqlite3_finalize(stmt5);
+    }
+
+    // Finally, delete from User table
+    char *sql6 = "DELETE FROM User WHERE email = ?;";
+    sqlite3_stmt *stmt6;
+    rc = sqlite3_prepare_v2(db, sql6, -1, &stmt6, 0);
+    if (rc != SQLITE_OK)
+    {
+        sqlite3_exec(db, "ROLLBACK;", 0, 0, &err_msg);
+        return -1;
+    }
+
+    sqlite3_bind_text(stmt6, 1, email, -1, SQLITE_STATIC);
+    rc = sqlite3_step(stmt6);
+    sqlite3_finalize(stmt6);
+
+    if (rc != SQLITE_DONE)
+    {
+        fprintf(stderr, "Failed to delete user: %s\n", sqlite3_errmsg(db));
+        sqlite3_exec(db, "ROLLBACK;", 0, 0, &err_msg);
+        return -1;
+    }
+
+    // Commit transaction
+    rc = sqlite3_exec(db, "COMMIT;", 0, 0, &err_msg);
+    if (rc != SQLITE_OK)
+    {
+        fprintf(stderr, "Failed to commit transaction: %s\n", err_msg);
+        sqlite3_free(err_msg);
+        return -1;
+    }
+
+    return 0;
+}
+
 int create_invitation(const char *sender_email, const char *receiver_email, int group_id)
 {
     // Check if invitation already exists

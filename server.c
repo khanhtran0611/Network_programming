@@ -985,6 +985,62 @@ void rejectInvite(int c)
     }
 }
 
+void updateUsername(int c)
+{
+    char data[256];
+    int bytes_recv = recv(c, data, sizeof(data) - 1, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv update username data");
+        return;
+    }
+    data[bytes_recv] = '\0';
+
+    // Parse: email|new_username
+    char *email = strtok(data, "|");
+    char *new_username = strtok(NULL, "|");
+
+    if (!email || !new_username)
+    {
+        send(c, "ERROR", 6, 0);
+        return;
+    }
+
+    if (update_username(email, new_username) == 0)
+    {
+        send(c, "OK", 3, 0);
+        printf("Username updated for %s to %s\n", email, new_username);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+        printf("Failed to update username for %s\n", email);
+    }
+}
+
+void deleteUser(int c)
+{
+    char email[MAX_EMAIL_LEN];
+    int bytes_recv = recv(c, email, sizeof(email) - 1, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv email");
+        return;
+    }
+    email[bytes_recv] = '\0';
+
+    if (delete_user(email) == 0)
+    {
+        send(c, "OK", 3, 0);
+        printf("User %s deleted successfully\n", email);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+        printf("Failed to delete user %s\n", email);
+    }
+}
+
 void verifyToken(int c)
 {
     char token[65];
@@ -1145,6 +1201,14 @@ void handle_client(int c)
     else if (strcmp(command, "REJECT_INVITE") == 0)
     {
         rejectInvite(c);
+    }
+    else if (strcmp(command, "UPDATE_USERNAME") == 0)
+    {
+        updateUsername(c);
+    }
+    else if (strcmp(command, "DELETE_USER") == 0)
+    {
+        deleteUser(c);
     }
     else if (strcmp(command, "VERIFY_TOKEN") == 0)
     {

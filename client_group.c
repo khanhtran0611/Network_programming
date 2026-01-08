@@ -17,7 +17,7 @@
 
 #define MAX_FILENAME 256
 #define MAX_PATH_LEN 3072
-#define COMMAND_LENGTH 16
+#define COMMAND_LENGTH 20
 #define TOKEN_FILE ".session_token"
 
 struct sockaddr_in server_addr2;
@@ -32,8 +32,11 @@ GtkWidget *user_label = NULL;
 GtkWidget *login_button = NULL;
 GtkWidget *logout_button = NULL;
 GtkWidget *invitations_listbox = NULL;
+GtkWidget *profile_email_label = NULL;
+GtkWidget *profile_username_label = NULL;
 GtkListBox *current_members_listbox = NULL;
 GtkListBox *current_requests_listbox = NULL;
+GtkListBox *current_non_members_listbox = NULL;
 struct sockaddr_in server_addr;  // client_addr and c are not used in client.c
 GtkListStore *file_list_store;
 GtkWidget *grp_window;
@@ -1453,6 +1456,20 @@ int is_current_user_leader(int group_id)
     return 0;
 }
 
+// Update profile tab
+void update_profile_tab(void)
+{
+    if (profile_email_label)
+    {
+        gtk_label_set_text(GTK_LABEL(profile_email_label), current_user_email);
+    }
+
+    if (profile_username_label)
+    {
+        gtk_label_set_text(GTK_LABEL(profile_username_label), current_username);
+    }
+}
+
 // Update user display
 void update_user_display(void)
 {
@@ -1486,6 +1503,9 @@ void update_user_display(void)
             {
                 load_invitations(GTK_LIST_BOX(invitations_listbox));
             }
+
+            // Update user profile tab
+            update_profile_tab();
         }
         else
         {
@@ -1679,6 +1699,7 @@ void open_group_details_window(int group_id, const char *group_name)
     // Save to global variables for later use
     current_members_listbox = members_listbox;
     current_requests_listbox = requests_listbox;
+    current_non_members_listbox = NULL;  // Will be set later
     GtkWidget *leave_group_button =
         GTK_WIDGET(gtk_builder_get_object(builder, "leave_group_button"));
     GtkWidget *notebook = GTK_WIDGET(gtk_builder_get_object(builder, "notebook"));
@@ -1763,8 +1784,8 @@ void open_group_details_window(int group_id, const char *group_name)
         GTK_WIDGET(gtk_builder_get_object(builder, "non_members_listbox"));
     if (non_members_listbox_widget)
     {
-        GtkListBox *non_members_listbox = GTK_LIST_BOX(non_members_listbox_widget);
-        load_non_members(non_members_listbox);
+        current_non_members_listbox = GTK_LIST_BOX(non_members_listbox_widget);
+        load_non_members(current_non_members_listbox);
     }
 
     // Hide leave button if user is leader (leader cannot leave)
@@ -2036,21 +2057,30 @@ void on_invite_clicked(GtkButton *button, gpointer user_data)
     {
         response[bytes_recv] = '\0';
 
+        GtkWidget *toplevel = gtk_widget_get_toplevel(GTK_WIDGET(button));
         GtkWidget *dialog;
         if (strcmp(response, "OK") == 0)
         {
             dialog =
-                gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK,
-                                       "Invitation sent to %s!", receiver_email);
+                gtk_message_dialog_new(GTK_WINDOW(toplevel), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+                                       GTK_BUTTONS_OK, "Invitation sent to %s!", receiver_email);
+            gtk_dialog_run(GTK_DIALOG(dialog));
+            gtk_widget_destroy(dialog);
+
+            // Reload non-members list
+            if (current_non_members_listbox)
+            {
+                load_non_members(current_non_members_listbox);
+            }
         }
         else
         {
-            dialog =
-                gtk_message_dialog_new(NULL, GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
-                                       "Failed to send invitation. User may already be invited.");
+            dialog = gtk_message_dialog_new(
+                GTK_WINDOW(toplevel), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+                "Failed to send invitation. User may already be invited.");
+            gtk_dialog_run(GTK_DIALOG(dialog));
+            gtk_widget_destroy(dialog);
         }
-        gtk_dialog_run(GTK_DIALOG(dialog));
-        gtk_widget_destroy(dialog);
     }
 
     close(s);
@@ -2122,22 +2152,9 @@ void on_reject_invite_clicked(GtkButton *button, gpointer user_data)
                                        GTK_BUTTONS_OK, "Invitation rejected successfully!");
 
             // Reload non-members list
-            GtkWidget *notebook = gtk_widget_get_ancestor(GTK_WIDGET(button), GTK_TYPE_NOTEBOOK);
-            if (notebook)
+            if (current_non_members_listbox)
             {
-                GtkWidget *invite_tab = gtk_notebook_get_nth_page(GTK_NOTEBOOK(notebook), 2);
-                if (invite_tab)
-                {
-                    GtkWidget *scrolled = gtk_bin_get_child(GTK_BIN(invite_tab));
-                    if (scrolled)
-                    {
-                        GtkWidget *listbox = gtk_bin_get_child(GTK_BIN(scrolled));
-                        if (GTK_IS_LIST_BOX(listbox))
-                        {
-                            load_non_members(GTK_LIST_BOX(listbox));
-                        }
-                    }
-                }
+                load_non_members(current_non_members_listbox);
             }
         }
         else
@@ -2774,6 +2791,234 @@ void on_leave_group_clicked(GtkButton *button, gpointer user_data)
     }
 }
 
+// ============ User Profile Management ============
+void on_edit_username_clicked(GtkButton *button, gpointer user_data)
+{
+    GtkWidget *dialog, *content_area, *entry;
+    GtkDialogFlags flags = GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT;
+
+    dialog = gtk_dialog_new_with_buttons("Edit Username", GTK_WINDOW(main_window), flags, "Cancel",
+                                         GTK_RESPONSE_CANCEL, "Save", GTK_RESPONSE_OK, NULL);
+
+    content_area = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_box_pack_start(GTK_BOX(content_area), box, TRUE, TRUE, 10);
+
+    GtkWidget *label = gtk_label_new("Enter new username:");
+    gtk_box_pack_start(GTK_BOX(box), label, FALSE, FALSE, 5);
+
+    entry = gtk_entry_new();
+    gtk_entry_set_text(GTK_ENTRY(entry), current_username);
+    gtk_box_pack_start(GTK_BOX(box), entry, FALSE, FALSE, 5);
+
+    gtk_widget_show_all(dialog);
+
+    gint result = gtk_dialog_run(GTK_DIALOG(dialog));
+
+    if (result == GTK_RESPONSE_OK)
+    {
+        const char *new_username = gtk_entry_get_text(GTK_ENTRY(entry));
+
+        if (strlen(new_username) == 0)
+        {
+            gtk_widget_destroy(dialog);
+
+            GtkWidget *error_dialog =
+                gtk_message_dialog_new(GTK_WINDOW(main_window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                       GTK_BUTTONS_OK, "Username cannot be empty!");
+            gtk_dialog_run(GTK_DIALOG(error_dialog));
+            gtk_widget_destroy(error_dialog);
+            return;
+        }
+
+        // Send UPDATE_USERNAME command to server
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0)
+        {
+            perror("socket");
+            gtk_widget_destroy(dialog);
+            return;
+        }
+
+        if (connect(sock, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+        {
+            perror("connect");
+            close(sock);
+            gtk_widget_destroy(dialog);
+            return;
+        }
+
+        // Send command
+        char command[COMMAND_LENGTH + 1] = "UPDATE_USERNAME";
+        send(sock, command, COMMAND_LENGTH, 0);
+
+        // Send email|new_username
+        char data[256];
+        memset(data, 0, sizeof(data));
+        snprintf(data, sizeof(data), "%s|%s", current_user_email, new_username);
+        send(sock, data, 256, 0);
+
+        // Receive response
+        char response[32];
+        int bytes_recv = recv(sock, response, 32, 0);
+        if (bytes_recv > 0)
+        {
+            response[bytes_recv] = '\0';
+            if (strcmp(response, "OK") == 0)
+            {
+                // Update local username
+                strncpy(current_username, new_username, sizeof(current_username) - 1);
+                current_username[sizeof(current_username) - 1] = '\0';
+
+                // Update UI
+                update_user_display();
+
+                // Update profile tab directly
+                update_profile_tab();
+            }
+            else
+            {
+                gtk_widget_destroy(dialog);
+
+                GtkWidget *error_dialog = gtk_message_dialog_new(
+                    GTK_WINDOW(main_window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+                    "Failed to update username!");
+                gtk_dialog_run(GTK_DIALOG(error_dialog));
+                gtk_widget_destroy(error_dialog);
+            }
+        }
+
+        close(sock);
+    }
+    else
+    {
+        gtk_widget_destroy(dialog);
+    }
+}
+
+void on_delete_user_clicked(GtkButton *button, gpointer user_data)
+{
+    GtkWidget *dialog;
+    GtkDialogFlags flags = GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT;
+
+    dialog =
+        gtk_message_dialog_new(GTK_WINDOW(main_window), flags, GTK_MESSAGE_WARNING,
+                               GTK_BUTTONS_YES_NO, "Are you sure you want to delete your account?");
+    gtk_message_dialog_format_secondary_text(
+        GTK_MESSAGE_DIALOG(dialog),
+        "This action cannot be undone. All your data will be permanently deleted.");
+
+    gint result = gtk_dialog_run(GTK_DIALOG(dialog));
+    gtk_widget_destroy(dialog);
+
+    if (result == GTK_RESPONSE_YES)
+    {
+        // Send DELETE_USER command to server
+        int sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (sock < 0)
+        {
+            perror("socket");
+            return;
+        }
+
+        if (connect(sock, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+        {
+            perror("connect");
+            close(sock);
+            return;
+        }
+
+        // Send command
+        char command[COMMAND_LENGTH + 1] = "DELETE_USER";
+        send(sock, command, COMMAND_LENGTH, 0);
+
+        // Send email
+        send(sock, current_user_email, MAX_EMAIL_LEN, 0);
+
+        // Receive response
+        char response[32];
+        int bytes_recv = recv(sock, response, 32, 0);
+        if (bytes_recv > 0)
+        {
+            response[bytes_recv] = '\0';
+            if (strcmp(response, "OK") == 0)
+            {
+                close(sock);
+
+                // Delete token
+                delete_token();
+
+                // Show message
+                GtkWidget *info_dialog = gtk_message_dialog_new(
+                    GTK_WINDOW(main_window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_OK,
+                    "Account deleted successfully!");
+                gtk_dialog_run(GTK_DIALOG(info_dialog));
+                gtk_widget_destroy(info_dialog);
+
+                // Exit application
+                gtk_main_quit();
+            }
+            else
+            {
+                close(sock);
+
+                GtkWidget *error_dialog = gtk_message_dialog_new(
+                    GTK_WINDOW(main_window), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR, GTK_BUTTONS_OK,
+                    "Failed to delete account!");
+                gtk_dialog_run(GTK_DIALOG(error_dialog));
+                gtk_widget_destroy(error_dialog);
+            }
+        }
+        else
+        {
+            close(sock);
+        }
+    }
+}
+
+void load_user_profile()
+{
+    GtkBuilder *builder = gtk_builder_new();
+    GError *error = NULL;
+
+    if (gtk_builder_add_from_file(builder, "download_folder/test.glade", &error) == 0)
+    {
+        g_printerr("Error loading UI file: %s\n", error->message);
+        g_clear_error(&error);
+        g_object_unref(builder);
+        return;
+    }
+
+    // Update email and username labels
+    GtkWidget *email_value = GTK_WIDGET(gtk_builder_get_object(builder, "user_email_value"));
+    if (email_value)
+    {
+        gtk_label_set_text(GTK_LABEL(email_value), current_user_email);
+    }
+
+    GtkWidget *username_value = GTK_WIDGET(gtk_builder_get_object(builder, "username_value"));
+    if (username_value)
+    {
+        gtk_label_set_text(GTK_LABEL(username_value), current_username);
+    }
+
+    // Connect button signals
+    GtkWidget *edit_button = GTK_WIDGET(gtk_builder_get_object(builder, "edit_username_button"));
+    if (edit_button)
+    {
+        g_signal_connect(edit_button, "clicked", G_CALLBACK(on_edit_username_clicked), NULL);
+    }
+
+    GtkWidget *delete_button = GTK_WIDGET(gtk_builder_get_object(builder, "delete_user_button"));
+    if (delete_button)
+    {
+        g_signal_connect(delete_button, "clicked", G_CALLBACK(on_delete_user_clicked), NULL);
+    }
+
+    g_object_unref(builder);
+}
+
 int main(int argc, char *argv[])
 {
     GtkBuilder *builder;
@@ -2797,6 +3042,10 @@ int main(int argc, char *argv[])
     groups_treeview = GTK_WIDGET(gtk_builder_get_object(builder, "groups_treeview"));
     group_list_store = GTK_LIST_STORE(gtk_builder_get_object(builder, "group_list_store"));
     invitations_listbox = GTK_WIDGET(gtk_builder_get_object(builder, "invitations_listbox"));
+
+    // Get profile tab widgets
+    profile_email_label = GTK_WIDGET(gtk_builder_get_object(builder, "user_email_value"));
+    profile_username_label = GTK_WIDGET(gtk_builder_get_object(builder, "username_value"));
 
     // Get header box to add user label, login and logout buttons
     header_box = GTK_WIDGET(gtk_builder_get_object(builder, "header_hbox"));
@@ -2832,6 +3081,22 @@ int main(int argc, char *argv[])
                      G_CALLBACK(on_groups_treeview_button_press), NULL);
     g_signal_connect(window, "destroy", G_CALLBACK(gtk_main_quit), NULL);
 
+    // Connect user profile signals
+    GtkWidget *edit_username_button =
+        GTK_WIDGET(gtk_builder_get_object(builder, "edit_username_button"));
+    if (edit_username_button)
+    {
+        g_signal_connect(edit_username_button, "clicked", G_CALLBACK(on_edit_username_clicked),
+                         NULL);
+    }
+
+    GtkWidget *delete_user_button =
+        GTK_WIDGET(gtk_builder_get_object(builder, "delete_user_button"));
+    if (delete_user_button)
+    {
+        g_signal_connect(delete_user_button, "clicked", G_CALLBACK(on_delete_user_clicked), NULL);
+    }
+
     server_addr2.sin_family = AF_INET;
     server_addr2.sin_port = htons(8081);
     server_addr2.sin_addr.s_addr = inet_addr("127.0.0.1");
@@ -2858,6 +3123,7 @@ int main(int argc, char *argv[])
             current_username[sizeof(current_username) - 1] = '\0';
 
             update_user_display();
+            update_profile_tab();
             on_refresh_groups_clicked(NULL, NULL);
 
             // Show main window

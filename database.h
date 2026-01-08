@@ -43,6 +43,8 @@ int verify_login(const char *email, const char *password, char *username, size_t
 int register_user(const char *email, const char *password, const char *username);
 int list_all_users(char *buffer, size_t buffer_size);
 int list_non_members(int group_id, char *buffer, size_t buffer_size);
+int update_username(const char *email, const char *new_username);
+int delete_user(const char *email);
 
 // Invitation operations
 int create_invitation(const char *sender_email, const char *receiver_email, int group_id);
