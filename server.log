@@ -22,3 +22,5 @@
 [2026-01-08 17:52:28] [LOGIN] [diana@example.com] [SUCCESS] User logged in successfully
 [2026-01-08 17:52:34] [APPROVE_REQUEST] [diana@example.com] [SUCCESS] Approved request 15 for group 11
 [2026-01-08 17:53:22] [UPDATE_USERNAME] [diana@example.com] [SUCCESS] Updated username to 'Diana Johnny'
+[2026-01-08 18:07:59] [LOGIN] [bob@example.com] [SUCCESS] User logged in successfully
+[2026-01-08 18:09:40] [REJECT_REQUEST] [bob@example.com] [SUCCESS] Rejected request 16 for group 2

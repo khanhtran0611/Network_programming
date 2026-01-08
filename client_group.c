@@ -53,6 +53,7 @@ char *download_path = "download_folder";
 void on_refresh_groups_clicked(GtkButton *button, gpointer user_data);
 void on_leave_group_clicked(GtkButton *button, gpointer user_data);
 void on_approve_request_clicked(GtkButton *button, gpointer user_data);
+void on_reject_request_clicked(GtkButton *button, gpointer user_data);
 void on_invite_clicked(GtkButton *button, gpointer user_data);
 void on_accept_invitation_clicked(GtkButton *button, gpointer user_data);
 void on_reject_received_invitation_clicked(GtkButton *button, gpointer user_data);
@@ -2075,7 +2076,7 @@ GtkWidget *create_member_row(const gchar *email)
 // Helper function to create request row (only for leaders)
 GtkWidget *create_request_row(int request_id, const gchar *email)
 {
-    GtkWidget *row, *box, *label, *approve_button;
+    GtkWidget *row, *box, *label, *reject_button, *approve_button;
 
     row = gtk_list_box_row_new();
     box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
@@ -2088,8 +2089,15 @@ GtkWidget *create_request_row(int request_id, const gchar *email)
     gtk_widget_set_halign(label, GTK_ALIGN_START);
     gtk_box_pack_start(GTK_BOX(box), label, TRUE, TRUE, 0);
 
+    reject_button = gtk_button_new_with_label("Reject");
+    gtk_widget_set_size_request(reject_button, 80, 30);
+    gtk_box_pack_end(GTK_BOX(box), reject_button, FALSE, FALSE, 0);
+    g_signal_connect(reject_button, "clicked", G_CALLBACK(on_reject_request_clicked),
+                     GINT_TO_POINTER(request_id));
+
     approve_button = gtk_button_new_with_label("Approve");
-    gtk_box_pack_end(GTK_BOX(box), approve_button, FALSE, TRUE, 0);
+    gtk_widget_set_size_request(approve_button, 80, 30);
+    gtk_box_pack_end(GTK_BOX(box), approve_button, FALSE, FALSE, 0);
     g_signal_connect(approve_button, "clicked", G_CALLBACK(on_approve_request_clicked),
                      GINT_TO_POINTER(request_id));
 
@@ -3079,6 +3087,94 @@ void on_approve_request_clicked(GtkButton *button, gpointer user_data)
             GtkWidget *error_dialog =
                 gtk_message_dialog_new(GTK_WINDOW(toplevel), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
                                        GTK_BUTTONS_OK, "Failed to approve request.");
+            gtk_dialog_run(GTK_DIALOG(error_dialog));
+            gtk_widget_destroy(error_dialog);
+        }
+    }
+}
+
+// Callback for reject request button
+void on_reject_request_clicked(GtkButton *button, gpointer user_data)
+{
+    // Check if user is leader
+    if (!is_current_user_leader(current_group_id))
+    {
+        GtkWidget *toplevel = gtk_widget_get_toplevel(GTK_WIDGET(button));
+        GtkWidget *error_dialog =
+            gtk_message_dialog_new(GTK_WINDOW(toplevel), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                   GTK_BUTTONS_OK, "Only group leader can reject requests!");
+        gtk_dialog_run(GTK_DIALOG(error_dialog));
+        gtk_widget_destroy(error_dialog);
+        return;
+    }
+
+    int request_id = GPOINTER_TO_INT(user_data);
+
+    // Show confirmation dialog
+    GtkWidget *toplevel = gtk_widget_get_toplevel(GTK_WIDGET(button));
+    GtkWidget *confirm_dialog =
+        gtk_message_dialog_new(GTK_WINDOW(toplevel), GTK_DIALOG_MODAL, GTK_MESSAGE_QUESTION,
+                               GTK_BUTTONS_YES_NO, "Are you sure you want to reject this request?");
+    gtk_window_set_title(GTK_WINDOW(confirm_dialog), "Reject Request");
+
+    gint result = gtk_dialog_run(GTK_DIALOG(confirm_dialog));
+    gtk_widget_destroy(confirm_dialog);
+
+    if (result != GTK_RESPONSE_YES)
+    {
+        return;
+    }
+
+    int s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == -1)
+    {
+        return;
+    }
+
+    if (connect(s, (struct sockaddr *)&server_addr2, sizeof(server_addr2)) < 0)
+    {
+        close(s);
+        return;
+    }
+
+    // Send REJECT_REQUEST command
+    send(s, "REJECT_REQUEST", COMMAND_LENGTH, 0);
+
+    // Send request_id
+    char request_id_str[32];
+    snprintf(request_id_str, sizeof(request_id_str), "%d", request_id);
+    send(s, request_id_str, 32, 0);
+
+    // Send current user email for verification
+    send(s, current_user_email, MAX_EMAIL_LEN, 0);
+
+    // Receive response
+    char response[32];
+    ssize_t bytes_recv = recv(s, response, sizeof(response) - 1, 0);
+    close(s);
+
+    if (bytes_recv > 0)
+    {
+        response[bytes_recv] = '\0';
+        if (strncmp(response, "OK", 2) == 0)
+        {
+            GtkWidget *success_dialog =
+                gtk_message_dialog_new(GTK_WINDOW(toplevel), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO,
+                                       GTK_BUTTONS_OK, "Request rejected successfully!");
+            gtk_dialog_run(GTK_DIALOG(success_dialog));
+            gtk_widget_destroy(success_dialog);
+
+            // Reload requests list
+            if (current_requests_listbox)
+            {
+                load_requests(current_requests_listbox);
+            }
+        }
+        else
+        {
+            GtkWidget *error_dialog =
+                gtk_message_dialog_new(GTK_WINDOW(toplevel), GTK_DIALOG_MODAL, GTK_MESSAGE_ERROR,
+                                       GTK_BUTTONS_OK, "Failed to reject request.");
             gtk_dialog_run(GTK_DIALOG(error_dialog));
             gtk_widget_destroy(error_dialog);
         }

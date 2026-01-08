@@ -292,6 +292,63 @@ void listRequests(int c)
     }
 }
 
+void rejectRequest(int c)
+{
+    char request_id_str[32];
+    char email[MAX_EMAIL_LEN];
+    int bytes_recv = recv(c, request_id_str, 32, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv request_id");
+        return;
+    }
+    request_id_str[bytes_recv] = '\0';
+    int request_id = atoi(request_id_str);
+
+    // Get email to verify leader
+    bytes_recv = recv(c, email, MAX_EMAIL_LEN, 0);
+    if (bytes_recv <= 0)
+    {
+        perror("recv email");
+        return;
+    }
+    email[bytes_recv] = '\0';
+
+    // Get group_id from request to check if user is leader
+    int group_id = get_request_group_id(request_id);
+
+    // Verify user is leader
+    if (group_id > 0 && !is_leader(group_id, email))
+    {
+        send(c, "ERROR|NOT_LEADER", 16, 0);
+        printf("User %s is not leader of group %d, cannot reject request %d\n", email, group_id,
+               request_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details),
+                 "Not leader of group %d, cannot reject request %d", group_id, request_id);
+        writeLog("REJECT_REQUEST", email, "ERROR", log_details);
+        return;
+    }
+
+    if (reject_request(request_id) == 0)
+    {
+        send(c, "OK", 3, 0);
+        printf("Request %d rejected by %s\n", request_id, email);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Rejected request %d for group %d", request_id,
+                 group_id);
+        writeLog("REJECT_REQUEST", email, "SUCCESS", log_details);
+    }
+    else
+    {
+        send(c, "ERROR", 6, 0);
+        printf("Failed to reject request %d\n", request_id);
+        char log_details[256];
+        snprintf(log_details, sizeof(log_details), "Failed to reject request %d", request_id);
+        writeLog("REJECT_REQUEST", email, "ERROR", log_details);
+    }
+}
+
 void removeMember(int c)
 {
     char leader_email[MAX_EMAIL_LEN];
@@ -1011,6 +1068,10 @@ void handle_client(int c)
     else if (strcmp(command, "APPROVE_REQ") == 0)
     {
         approveRequest(c);
+    }
+    else if (strcmp(command, "REJECT_REQUEST") == 0)
+    {
+        rejectRequest(c);
     }
     else if (strcmp(command, "LIST_REQUESTS") == 0)
     {
